@@ -1,0 +1,2 @@
+# Optional offline voice backend; Windows SAPI remains available without it.
+pyttsx3>=2.90
