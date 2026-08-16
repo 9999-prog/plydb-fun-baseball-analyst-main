@@ -7,10 +7,13 @@ from advanced_metrics import (
     batter_pitcher_h2h_metrics,
     build_team_metric_cards,
     expected_value_per_unit,
+    expected_value_decimal,
     market_card,
     modern_batter_context,
     shrink_rate,
     team_h2h_metrics,
+    decimal_to_probability,
+    probability_to_decimal,
 )
 
 
@@ -94,21 +97,22 @@ class AdvancedMetricTests(unittest.TestCase):
         self.assertEqual(missing["h2h_status"], "NO_DATA")
 
     def test_market_aliases_and_outlier_prices_are_safe(self):
+        # Decimal odds: -110 -> 1.909, -105 -> 1.952, -115 -> 1.870, 2500 -> 26.0, -800 -> 1.125
         odds = [{
             "home_team": "New York Yankees",
             "away_team": "Boston Red Sox",
             "bookmakers": [
                 {"markets": [{"key": "h2h", "outcomes": [
-                    {"name": "New York Yankees", "price": -110},
-                    {"name": "Boston Red Sox", "price": -110},
+                    {"name": "New York Yankees", "price": 1.909},
+                    {"name": "Boston Red Sox", "price": 1.909},
                 ]}]},
                 {"markets": [{"key": "h2h", "outcomes": [
-                    {"name": "New York Yankees", "price": -105},
-                    {"name": "Boston Red Sox", "price": -115},
+                    {"name": "New York Yankees", "price": 1.952},
+                    {"name": "Boston Red Sox", "price": 1.870},
                 ]}]},
                 {"markets": [{"key": "h2h", "outcomes": [
-                    {"name": "New York Yankees", "price": 2500},
-                    {"name": "Boston Red Sox", "price": -800},
+                    {"name": "New York Yankees", "price": 26.0},
+                    {"name": "Boston Red Sox", "price": 1.125},
                 ]}]},
             ],
         }]
@@ -116,14 +120,15 @@ class AdvancedMetricTests(unittest.TestCase):
         self.assertTrue(market["available"])
         self.assertEqual(market["price_filter"], "ROBUST")
         self.assertGreaterEqual(market["outlier_count"], 1)
-        self.assertNotEqual(market["home_best_price"], 2500)
+        self.assertNotEqual(market["home_best_price"], 26.0)
 
     def test_market_is_no_vig_and_ev_uses_price(self):
+        # Decimal odds: -110 -> 1.909, 100 -> 2.0
         odds = [{
             "home_team": "AAA", "away_team": "BBB",
             "bookmakers": [{"markets": [{"key": "h2h", "outcomes": [
-                {"name": "AAA", "price": -110},
-                {"name": "BBB", "price": 100},
+                {"name": "AAA", "price": 1.909},
+                {"name": "BBB", "price": 2.0},
             ]}]}],
         }]
         market = market_card(odds, "AAA", "BBB")
@@ -132,7 +137,19 @@ class AdvancedMetricTests(unittest.TestCase):
             market["home_market_probability"] + market["away_market_probability"],
             1.0,
         )
-        self.assertAlmostEqual(expected_value_per_unit(0.60, -110), 0.1454545454)
+        # EV with decimal odds: 0.60 * 1.909 - 1 = 0.1454
+        self.assertAlmostEqual(expected_value_decimal(0.60, 1.909), 0.1454, places=4)
+
+    def test_decimal_odds_conversions(self):
+        # Test decimal <-> probability conversions
+        self.assertAlmostEqual(decimal_to_probability(2.0), 0.5)
+        self.assertAlmostEqual(decimal_to_probability(1.909), 0.5238, places=3)
+        self.assertAlmostEqual(probability_to_decimal(0.5), 2.0)
+        self.assertAlmostEqual(probability_to_decimal(0.5238), 1.909, places=3)
+        
+        # Test EV calculation
+        self.assertAlmostEqual(expected_value_decimal(0.60, 2.0), 0.2)
+        self.assertAlmostEqual(expected_value_decimal(0.5238, 1.909), 0.0, places=2)
 
     def test_modern_player_context_is_labelled_proxy(self):
         context = modern_batter_context(

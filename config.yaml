@@ -1,0 +1,151 @@
+# MLB Baseball Analyst - Central Configuration
+# All tunable parameters, thresholds, and paths in one place
+
+# ================================================================
+# PATHS
+# ================================================================
+paths:
+  root: "."
+  data_dir: "data/pybaseball/statcast"
+  raw_statcast: "statcast_2023_2024_2025.parquet"
+  pa_model_ready: "statcast_multiseason_pa_level_model_ready.parquet"
+  advanced_features: "advanced_matchup_features.parquet"
+  batter_game_level: "statcast_multiseason_batter_game_level.parquet"
+  models_dir: "."
+  hit_model: "hit_model.joblib"
+  win_model: "win_model.joblib"
+  caches_dir: "."
+  prediction_report: "prediction_report.json"
+
+# ================================================================
+# ODDS & MARKET SETTINGS
+# ================================================================
+odds:
+  api_key_env: "ODDS_API_KEY"
+  api_url: "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
+  regions: ["au"]
+  markets: ["h2h", "totals"]
+  odds_format: "decimal"  # CHANGED: use decimal odds throughout
+  timeout_seconds: 20
+  max_staleness_hours: 4  # reject odds older than this
+  outlier_probability_tolerance: 0.05  # reduced from 0.10
+
+# ================================================================
+# MODEL WEIGHTS - TEAM WIN COMPOSITE
+# ================================================================
+win_model_weights:
+  model: 0.42          # trained win_model probability
+  pythag: 0.14         # season Pythagorean win-expectation diff
+  recent_form: 0.18    # recency-weighted last-10-games run diff
+  sp_quality: 0.10     # starter quality diff
+  bullpen: 0.08        # bullpen quality diff
+  lineup: 0.08         # projected lineup strength vs opposing starter
+  rest_advantage_max: 0.02
+  h2h_nudge_max: 0.02
+
+# ================================================================
+# MODEL WEIGHTS - BATTER HIT COMPOSITE
+# ================================================================
+batter_model_weights:
+  model: 0.40          # trained hit_model probability
+  recent_form: 0.25    # enhanced recent form (multi-window)
+  pitcher_allowed: 0.15  # opposing pitcher's xBA/K%/BB% allowed
+  platoon: 0.10        # platoon (L/R) split
+  park: 0.08           # park factor
+  bvp: 0.02            # shrunk batter-vs-pitcher history
+
+# ================================================================
+# SHRINKAGE & RECENCY PARAMETERS
+# ================================================================
+shrinkage:
+  bvp_shrink_k: 12          # effective PA added as prior
+  h2h_shrink_k: 6           # effective games added as prior
+  form_shrink_strength: 5.0
+  recency_half_life_games: 4.0
+  platoon_roll_window: 40
+  platoon_min_periods: 8
+  park_min_prior_pa: 200
+
+# ================================================================
+# VALIDATION THRESHOLDS (NO-BET RULES)
+# ================================================================
+validation:
+  # Minimum edge required to place a bet
+  min_edge_win: 0.04           # 4pp edge vs no-vig market
+  min_edge_batter: 0.03        # 3pp edge for batter props
+  
+  # Minimum signal quality
+  min_signal_quality: 0.50
+  
+  # Maximum data staleness for high-confidence picks
+  max_staleness_days_high_confidence: 14
+  max_staleness_days_any_bet: 60
+  
+  # Minimum sample sizes
+  min_h2h_games: 3
+  min_bvp_pa: 8
+  min_recent_form_games: 5
+  min_modern_games_full_weight: 10
+  
+  # Uncertainty thresholds (if implemented)
+  max_calibration_error: 0.05
+  min_confidence_interval_width: 0.10
+
+# ================================================================
+# BACKTEST & VALIDATION SETTINGS
+# ================================================================
+backtest:
+  # Walk-forward CV folds (season boundaries)
+  train_seasons: [2023, 2024]
+  test_seasons: [2025]
+  # Future: add 2026 as holdout
+  holdout_seasons: [2026]
+  
+  # Calibration
+  calibration_method: "isotonic"  # or "platt"
+  calibration_cv_folds: 3
+  
+  # Evaluation metrics
+  metrics: ["log_loss", "brier", "ece", "accuracy", "roc_auc"]
+  
+  # Betting simulation
+  kelly_fraction: 0.25  # 1/4 Kelly
+  min_bet_size: 0.1
+  max_bet_size: 1.0
+  bankroll: 1000
+
+# ================================================================
+# DATA FRESHNESS & API SETTINGS
+# ================================================================
+data_freshness:
+  statcast_staleness_warning_days: 14
+  statcast_staleness_critical_days: 30
+  modern_stats_weight: 0.70
+  modern_stats_min_games: 10
+  modern_stats_cache_ttl_hours: 6
+
+# ================================================================
+# FEATURE ENGINEERING PARAMETERS
+# ================================================================
+features:
+  batter_roll_window: 25
+  batter_min_periods: 5
+  pitcher_roll_window: 5
+  pitcher_min_periods: 2
+  lineup_games: 20
+  n_batters: 9
+  h2h_lookback: 10
+
+# ================================================================
+# LOGGING & OUTPUT
+# ================================================================
+logging:
+  level: "INFO"
+  format: "json"  # or "text"
+  file: "logs/predictor.log"
+  console_colors: true
+
+# ================================================================
+# TIMEZONE
+# ================================================================
+timezone: "America/New_York"

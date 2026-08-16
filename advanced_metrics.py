@@ -134,31 +134,72 @@ def confidence_adjusted_probability(
     return 0.5 + (raw - 0.5) * evidence, evidence
 
 
-def american_to_probability(odds: Any) -> float | None:
-    odds = finite(odds)
-    if odds is None or odds == 0:
+def decimal_to_probability(decimal_odds: Any) -> float | None:
+    """Convert decimal odds to implied probability."""
+    odds = finite(decimal_odds)
+    if odds is None or odds <= 1.0:
         return None
-    if odds > 0:
-        return 100.0 / (odds + 100.0)
-    return abs(odds) / (abs(odds) + 100.0)
+    return 1.0 / odds
+
+
+def probability_to_decimal(probability: Any) -> float | None:
+    """Convert probability to fair decimal odds."""
+    p = clamp(probability)
+    if p is None or p <= 0.0 or p >= 1.0:
+        return None
+    return 1.0 / p
+
+
+def expected_value_decimal(probability: Any, decimal_odds: Any) -> float | None:
+    """Expected profit per one unit staked at the supplied decimal odds.
+    
+    EV = probability * decimal_odds - 1
+    """
+    probability = clamp(probability)
+    odds = finite(decimal_odds)
+    if probability is None or odds is None or odds <= 1.0:
+        return None
+    return probability * odds - 1.0
+
+
+# Backward compatibility (deprecated)
+def american_to_probability(odds: Any) -> float | None:
+    """DEPRECATED: Convert American odds to implied probability."""
+    # Convert to decimal first
+    if odds is None:
+        return None
+    try:
+        odds = float(odds)
+        if odds > 0:
+            decimal = 1.0 + odds / 100.0
+        elif odds < 0:
+            decimal = 1.0 + 100.0 / abs(odds)
+        else:
+            return None
+        return decimal_to_probability(decimal)
+    except (TypeError, ValueError):
+        return None
 
 
 def american_to_decimal(odds: Any) -> float | None:
-    odds = finite(odds)
-    if odds is None or odds == 0:
+    """DEPRECATED: Convert American odds to decimal."""
+    if odds is None:
         return None
-    if odds > 0:
-        return 1.0 + odds / 100.0
-    return 1.0 + 100.0 / abs(odds)
+    try:
+        odds = float(odds)
+        if odds > 0:
+            return 1.0 + odds / 100.0
+        elif odds < 0:
+            return 1.0 + 100.0 / abs(odds)
+        return None
+    except (TypeError, ValueError):
+        return None
 
 
 def expected_value_per_unit(probability: Any, american_odds: Any) -> float | None:
-    """Expected profit per one unit staked at the supplied American price."""
-    probability = clamp(probability)
+    """DEPRECATED: Expected profit per one unit staked at American price."""
     decimal = american_to_decimal(american_odds)
-    if probability is None or decimal is None:
-        return None
-    return probability * decimal - 1.0
+    return expected_value_decimal(probability, decimal)
 
 
 TEAM_ALIASES = {
@@ -238,8 +279,9 @@ def _market_game(odds_data: Any, home_team: str, away_team: str) -> list[dict[st
                 )
                 if home_price is None or away_price is None:
                     continue
-                home_raw = american_to_probability(home_price)
-                away_raw = american_to_probability(away_price)
+                # Odds are now in decimal format
+                home_raw = decimal_to_probability(home_price)
+                away_raw = decimal_to_probability(away_price)
                 if home_raw is None or away_raw is None or home_raw + away_raw <= 0:
                     continue
                 records.append({
@@ -254,13 +296,15 @@ def _market_game(odds_data: Any, home_team: str, away_team: str) -> list[dict[st
 
 
 def market_card(odds_data: Any, home_team: str, away_team: str) -> dict[str, Any]:
-    """Use a consensus probability and a robust best available price.
+    """Use a consensus probability and a robust best available price (decimal odds).
 
     The median no-vig probability is more stable than one book's implied
     probability. Best-price selection is restricted to quotes within a
     generous distance of that consensus so an obvious stale/outlier quote
     cannot manufacture a huge EV number. If every quote is unusual, the
     closest quote is retained and the card exposes the filter status.
+    
+    Returns decimal odds for best prices.
     """
     records = _market_game(odds_data, home_team, away_team)
     if not records:
@@ -306,8 +350,8 @@ def market_card(odds_data: Any, home_team: str, away_team: str) -> dict[str, Any
         "available": True,
         "home_market_probability": home_market_probability,
         "away_market_probability": away_market_probability,
-        "home_best_price": max(r["home_price"] for r in home_eligible),
-        "away_best_price": max(r["away_price"] for r in away_eligible),
+        "home_best_price": max(r["home_price"] for r in home_eligible),  # decimal odds
+        "away_best_price": max(r["away_price"] for r in away_eligible),  # decimal odds
         "book_count": len(records),
         "robust_book_count": len(robust_records_used),
         "outlier_count": max(0, len(records) - len(robust_records_used)),

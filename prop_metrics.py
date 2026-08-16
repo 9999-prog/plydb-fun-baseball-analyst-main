@@ -71,15 +71,33 @@ def _blend_with_neutral(probability, coverage):
     return 0.5 + (probability - 0.5) * coverage
 
 
-def fair_american_odds(probability):
+def probability_to_decimal(probability):
+    """Convert probability to fair decimal odds."""
     p = safe_num(probability)
     p = clamp(p, 1e-6, 0.999999)
-    if p >= 0.5:
-        return int(round((p / (1.0 - p)) * 100.0))
-    return int(round(-((1.0 - p) / p) * 100.0))
+    return 1.0 / p
+
+
+def decimal_to_probability(decimal_odds):
+    """Convert decimal odds to implied probability."""
+    odds = safe_num(decimal_odds)
+    if not valid(odds) or odds <= 1.0:
+        return np.nan
+    return 1.0 / odds
+
+
+# Backward compatibility (deprecated)
+def fair_american_odds(probability):
+    """DEPRECATED: Convert probability to fair American odds."""
+    dec = probability_to_decimal(probability)
+    if dec >= 2.0:
+        return int(round((dec - 1.0) * 100))
+    else:
+        return int(round(-100.0 / (dec - 1.0)))
 
 
 def _american_implied_probability(odds):
+    """DEPRECATED: Convert American odds to implied probability."""
     odds = safe_num(odds)
     if not valid(odds) or odds == 0:
         return np.nan
@@ -89,7 +107,7 @@ def _american_implied_probability(odds):
 
 
 def best_total_market(home_team, away_team, odds_data, side="over"):
-    """Return a robust best quote for one side of the main totals market.
+    """Return a robust best quote for one side of the main totals market (decimal odds).
 
     Totals are vulnerable to mixing alternate lines and stale bookmaker
     quotes. Prefer the consensus point and discard a quote whose implied
@@ -112,12 +130,12 @@ def best_total_market(home_team, away_team, odds_data, side="over"):
                         continue
                     point = safe_num(outcome.get("point"))
                     price = safe_num(outcome.get("price"))
-                    implied = _american_implied_probability(price)
+                    implied = decimal_to_probability(price)
                     if not valid(point) or not valid(price) or not valid(implied):
                         continue
                     candidates.append({
                         "point": float(point),
-                        "price": float(price),
+                        "price": float(price),  # decimal odds
                         "implied_probability": float(implied),
                     })
     if not candidates:
@@ -146,7 +164,7 @@ def best_total_market(home_team, away_team, odds_data, side="over"):
             same_line,
             key=lambda row: abs(row["implied_probability"] - consensus_probability),
         )]
-    # At the same line, the largest American number is the best payout.
+    # At the same line, the largest decimal odds is the best payout.
     return max(robust, key=lambda row: row["price"])
 
 
@@ -469,7 +487,7 @@ def select_best_nrfi(games, pa_df, as_of_date):
                 "home_team": game["home_team"],
                 "away_team": game["away_team"],
                 "prob": prob,
-                "fair_price": fair_american_odds(prob),
+                "fair_price": probability_to_decimal(prob),
             }
     return candidate
 

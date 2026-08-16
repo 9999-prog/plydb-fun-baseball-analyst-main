@@ -1,9 +1,10 @@
+import math
 import unittest
-
+from datetime import timedelta
+import numpy as np
 import pandas as pd
 
-from build_advanced_matchup_features import build_advanced_feature_table
-from modern_stats import blend_rate
+from modern_stats import blend_rate, fetch_modern_team_stats
 from prop_metrics import (
     best_total_market,
     projected_nrfi_prob,
@@ -12,7 +13,10 @@ from prop_metrics import (
     recent_team_scoring_profile,
     team_first_inning_runs,
     totals_pick,
+    decimal_to_probability,
+    probability_to_decimal,
 )
+from build_advanced_matchup_features import build_advanced_feature_table
 
 
 class PropMetricTests(unittest.TestCase):
@@ -73,29 +77,31 @@ class PropMetricTests(unittest.TestCase):
         self.assertAlmostEqual(result["projected_total"], 9.0)
 
     def test_total_market_filters_extreme_price_and_matches_aliases(self):
+        # Decimal odds: -110 -> 1.909, -105 -> 1.952, -115 -> 1.870, 2500 -> 26.0, -800 -> 1.125
         odds = [{
             "home_team": "Los Angeles Dodgers",
             "away_team": "New York Yankees",
             "bookmakers": [
                 {"markets": [{"key": "totals", "outcomes": [
-                    {"name": "Over", "point": 8.5, "price": -110},
-                    {"name": "Under", "point": 8.5, "price": -110},
+                    {"name": "Over", "point": 8.5, "price": 1.909},
+                    {"name": "Under", "point": 8.5, "price": 1.909},
                 ]}]},
                 {"markets": [{"key": "totals", "outcomes": [
-                    {"name": "Over", "point": 8.5, "price": -105},
-                    {"name": "Under", "point": 8.5, "price": -115},
+                    {"name": "Over", "point": 8.5, "price": 1.952},
+                    {"name": "Under", "point": 8.5, "price": 1.870},
                 ]}]},
                 {"markets": [{"key": "totals", "outcomes": [
-                    {"name": "Over", "point": 8.5, "price": 2500},
-                    {"name": "Under", "point": 8.5, "price": -800},
+                    {"name": "Over", "point": 8.5, "price": 26.0},
+                    {"name": "Under", "point": 8.5, "price": 1.125},
                 ]}]},
             ],
         }]
         over = best_total_market("LAD", "NYY", odds, side="over")
         self.assertEqual(over["point"], 8.5)
-        self.assertNotEqual(over["price"], 2500)
+        self.assertNotEqual(over["price"], 26.0)
 
     def test_missing_current_window_is_neutral_and_passes(self):
+        # Decimal odds: -110 -> 1.909
         odds = [
             {
                 "home_team": "BBB",
@@ -104,8 +110,8 @@ class PropMetricTests(unittest.TestCase):
                     {
                         "markets": [
                             {"key": "totals", "outcomes": [
-                                {"name": "Over", "point": 8.5, "price": -110},
-                                {"name": "Under", "point": 8.5, "price": -110},
+                                {"name": "Over", "point": 8.5, "price": 1.909},
+                                {"name": "Under", "point": 8.5, "price": 1.909},
                             ]}
                         ]
                     }

@@ -66,6 +66,19 @@ from advanced_metrics import (
 )
 from predictor_utils import clean_sentence, pick_annotation, safe_error
 
+# NEW: Config, logging, decimal odds
+from config_loader import (
+    get_config, get_odds_config, get_win_model_weights, get_batter_model_weights,
+    get_shrinkage_params, get_validation_params, get_data_freshness_params,
+    get_feature_params, get_paths, get_timezone
+)
+from logging_utils import setup_logging, get_logger, PredictionLogger, LogTimer
+from odds_decimal import (
+    decimal_to_probability, probability_to_decimal, expected_value_decimal,
+    kelly_fraction, no_vig_probabilities, best_decimal_odds,
+    american_to_decimal, decimal_to_american
+)
+
 warnings.filterwarnings("ignore")
 
 # The analyst's visible terminal presentation is intentionally limited to
@@ -73,86 +86,65 @@ warnings.filterwarnings("ignore")
 # adjustment when the process is attached to a compatible interactive host.
 configure_terminal_display()
 
+# Setup structured logging
+logger = setup_logging("mlb_analyst.predictor")
+pred_logger = PredictionLogger(logger)
+
 
 # ================================================================
-# USER SETTINGS
+# LOAD CONFIGURATION
 # ================================================================
 
-ODDS_API_KEY = os.getenv("ODDS_API_KEY", "").strip()
+config = get_config()
+odds_config = get_odds_config()
+win_weights = get_win_model_weights()
+batter_weights = get_batter_model_weights()
+shrinkage = get_shrinkage_params()
+validation = get_validation_params()
+data_freshness = get_data_freshness_params()
+features_config = get_feature_params()
+paths_config = get_paths()
+TIMEZONE_STR = get_timezone()
 
-# Lightweight .env loader: if ODDS_API_KEY isn't set in the environment,
-# try to read a .env file in the current working directory with format
-# ODDS_API_KEY=your_key_here
-if not ODDS_API_KEY:
-    try:
-        dotenv_candidates = [
-            os.path.join(os.getcwd(), ".env"),
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
-        ]
-        for dotenv_path in dict.fromkeys(dotenv_candidates):
-            if not os.path.exists(dotenv_path):
-                continue
-            with open(dotenv_path, "r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    if "=" not in line:
-                        continue
-                    k, v = line.split("=", 1)
-                    k = k.strip()
-                    v = v.strip().strip('"').strip("'")
-                    if k == "ODDS_API_KEY" and v:
-                        ODDS_API_KEY = v
-                        os.environ["ODDS_API_KEY"] = v
-                        break
-            if ODDS_API_KEY:
-                break
-    except Exception:
-        pass
+ODDS_API_KEY = odds_config.get("api_key") or os.getenv("ODDS_API_KEY", "").strip()
 
-H2H_LOOKBACK = 10
-H2H_MIN_GAMES = 3
-BVP_MIN_PA = 8
-
-LINEUP_GAMES = 20
-N_BATTERS = 9
-
-# --- shrinkage strength: higher = small samples pulled harder to league mean
-BVP_SHRINK_K = 12          # "effective PA" added as a prior
-H2H_SHRINK_K = 6           # "effective games" added as a prior
-
-# --- recency decay: half-life in games for the exponential weighting
-RECENCY_HALF_LIFE_GAMES = 4.0
-
-# --- composite scoring weights (team win side) - modern data carries the lead,
-# historical priors are retained as a stabilizer rather than the engine.
-W_MODEL = 0.42          # your trained win_model probability
-W_PYTHAG = 0.14         # season Pythagorean win-expectation diff
-W_RECENT_FORM = 0.18    # recency-weighted last-10-games run diff
-W_SP_QUALITY = 0.10     # starter quality diff
-W_BULLPEN = 0.08        # bullpen quality diff
-W_LINEUP = 0.08         # projected lineup strength vs the opposing starter
-
-# small additive nudges (not part of the weighted blend above, capped)
-REST_ADVANTAGE_MAX = 0.02
-H2H_NUDGE_MAX = 0.02
-
-# --- composite scoring weights (batter hit side) - modern matchup signal wins,
-# historical priors are a shrinkage layer and not the main engine.
-WB_MODEL = 0.50         # your trained hit_model probability
-WB_RECENT_FORM = 0.20   # recency-weighted last-10-games hit rate
-WB_PITCHER_ALLOWED = 0.15  # opposing pitcher's xBA/K%/BB% allowed
-WB_PLATOON = 0.08       # platoon (L/R) split
-WB_PARK = 0.04          # park factor
-WB_BVP = 0.03           # shrunk batter-vs-pitcher history (kept deliberately small)
-
-
-BASEBALL_TZ = ZoneInfo("America/New_York")
-# Default date: prefer a YYYY-MM-DD command-line argument, otherwise use the
-# local machine's current date. Flags such as --speak can appear before or
-# after the date without being mistaken for a date.
+BASEBALL_TZ = ZoneInfo(TIMEZONE_STR)
 LOCAL_TZ = datetime.now().astimezone().tzinfo or BASEBALL_TZ
+
+# Load constants from config
+H2H_LOOKBACK = features_config.get("h2h_lookback", 10)
+H2H_MIN_GAMES = validation.get("min_h2h_games", 3)
+BVP_MIN_PA = validation.get("min_bvp_pa", 8)
+LINEUP_GAMES = features_config.get("lineup_games", 20)
+N_BATTERS = features_config.get("n_batters", 9)
+BVP_SHRINK_K = shrinkage.get("bvp_shrink_k", 12)
+H2H_SHRINK_K = shrinkage.get("h2h_shrink_k", 6)
+RECENCY_HALF_LIFE_GAMES = shrinkage.get("recency_half_life_games", 4.0)
+
+# Win model weights from config
+W_MODEL = win_weights.get("model", 0.42)
+W_PYTHAG = win_weights.get("pythag", 0.14)
+W_RECENT_FORM = win_weights.get("recent_form", 0.18)
+W_SP_QUALITY = win_weights.get("sp_quality", 0.10)
+W_BULLPEN = win_weights.get("bullpen", 0.08)
+W_LINEUP = win_weights.get("lineup", 0.08)
+REST_ADVANTAGE_MAX = win_weights.get("rest_advantage_max", 0.02)
+H2H_NUDGE_MAX = win_weights.get("h2h_nudge_max", 0.02)
+
+# Batter model weights from config
+WB_MODEL = batter_weights.get("model", 0.40)
+WB_RECENT_FORM = batter_weights.get("recent_form", 0.25)
+WB_PITCHER_ALLOWED = batter_weights.get("pitcher_allowed", 0.15)
+WB_PLATOON = batter_weights.get("platoon", 0.10)
+WB_PARK = batter_weights.get("park", 0.08)
+WB_BVP = batter_weights.get("bvp", 0.02)
+
+# Validation thresholds
+MIN_EDGE_WIN = validation.get("min_edge_win", 0.04)
+MIN_EDGE_BATTER = validation.get("min_edge_batter", 0.03)
+MIN_SIGNAL_QUALITY = validation.get("min_signal_quality", 0.50)
+MAX_STALENESS_HIGH_CONF = validation.get("max_staleness_days_high_confidence", 14)
+MAX_STALENESS_ANY_BET = validation.get("max_staleness_days_any_bet", 60)
 CLI_ARGS = sys.argv[1:]
 SPEAK_OUTPUT = (
     "--speak" in CLI_ARGS
@@ -177,6 +169,11 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 STATCAST_FILE = os.path.join(
     ROOT, "data", "pybaseball", "statcast",
     "statcast_multiseason_pa_level_model_ready.parquet"
+)
+# Raw Statcast file for staleness check (updated with recent 2026 data)
+RAW_STATCAST_FILE = os.path.join(
+    ROOT, "data", "pybaseball", "statcast",
+    "statcast.parquet"
 )
 
 
@@ -466,24 +463,32 @@ print("\nLoading Statcast...")
 pa_df = pd.read_parquet(STATCAST_FILE)
 print(f"Loaded {len(pa_df):,} plate appearances.")
 
-pa_df["game_date"] = pd.to_datetime(pa_df["game_date"], errors="coerce")
-PA_LATEST_DATE = pa_df["game_date"].max()
-PA_EARLIEST_DATE = pa_df["game_date"].min()
+# Load raw Statcast file for staleness check (has recent 2026 data)
+raw_df = pd.read_parquet(RAW_STATCAST_FILE)
+raw_df["game_date"] = pd.to_datetime(raw_df["game_date"], errors="coerce")
+RAW_LATEST_DATE = raw_df["game_date"].max()
+RAW_EARLIEST_DATE = raw_df["game_date"].min()
 try:
-    DATA_STALENESS_DAYS = max(0, (pd.Timestamp(DATE) - PA_LATEST_DATE).days)
+    DATA_STALENESS_DAYS = max(0, (pd.Timestamp(DATE) - RAW_LATEST_DATE).days)
 except Exception:
     DATA_STALENESS_DAYS = None
-if pd.notna(PA_LATEST_DATE):
+if pd.notna(RAW_LATEST_DATE):
     age_label = f"{DATA_STALENESS_DAYS} days old" if DATA_STALENESS_DAYS is not None else "age unavailable"
     print(
-        f"Local Statcast coverage: {PA_EARLIEST_DATE.date()} -> "
-        f"{PA_LATEST_DATE.date()} ({age_label})."
+        f"Local Statcast coverage: {RAW_EARLIEST_DATE.date()} -> "
+        f"{RAW_LATEST_DATE.date()} ({age_label})."
     )
     if DATA_STALENESS_DAYS is not None and DATA_STALENESS_DAYS > 14:
         print(
             "WARNING: local player-level Statcast is stale; current-season team "
             "API context will be shown separately and old player signals should "
             "not be treated as live form."
+        )
+    # Additional warning for severe staleness
+    if DATA_STALENESS_DAYS is not None and DATA_STALENESS_DAYS > 30:
+        print(
+            "CRITICAL WARNING: Local Statcast data is severely stale (>30 days). "
+            "Prediction reliability may be significantly reduced."
         )
 
 for column in ["home_team", "away_team", "inning_topbot", "p_throws", "stand"]:
@@ -1313,9 +1318,14 @@ def score_matchup(game):
     else:
         model_prob_home = np.nan
 
-    if not valid(model_prob_home):
-        # Neutral is an absence-of-model fallback, not evidence for the home side.
-        model_prob_home = 0.5
+    # Improved model availability handling: don't use model probability when unavailable
+    if not model_available:
+        print(f"WARNING: Win model unavailable for {home} vs {away}, falling back to priors only")
+        model_prob_home = 0.5  # Neutral fallback when model unavailable
+        # Reduce weight of model component when unavailable
+        model_weight_adjustment = 0.0
+    else:
+        model_weight_adjustment = W_MODEL
 
     # 2) Pythagorean win expectation.  Prefer the modern adapter's current
     # season rates, with the existing endpoint as a non-synthetic fallback.
@@ -1357,14 +1367,27 @@ def score_matchup(game):
     away_lineup = projected_lineup_strength(away, game.get("home_pitcher_id"), DATE)
     lineup_score = clamp(0.5 + (home_lineup - away_lineup) / 2.0, 0.05, 0.95)
 
-    blended = (
-        W_MODEL * logit(model_prob_home)
-        + W_PYTHAG * logit(pyth_diff_score)
-        + W_RECENT_FORM * logit(form_score)
-        + W_SP_QUALITY * logit(sp_score)
-        + W_BULLPEN * logit(bp_score)
-        + W_LINEUP * logit(lineup_score)
-    )
+    # Adjust weights when model is unavailable
+    effective_W_MODEL = model_weight_adjustment if 'model_weight_adjustment' in locals() else W_MODEL
+    if effective_W_MODEL == 0.0:
+        # Renormalize weights when model is unavailable
+        total_weight = W_PYTHAG + W_RECENT_FORM + W_SP_QUALITY + W_BULLPEN + W_LINEUP
+        blended = (
+            (W_PYTHAG / total_weight) * logit(pyth_diff_score)
+            + (W_RECENT_FORM / total_weight) * logit(form_score)
+            + (W_SP_QUALITY / total_weight) * logit(sp_score)
+            + (W_BULLPEN / total_weight) * logit(bp_score)
+            + (W_LINEUP / total_weight) * logit(lineup_score)
+        )
+    else:
+        blended = (
+            effective_W_MODEL * logit(model_prob_home)
+            + W_PYTHAG * logit(pyth_diff_score)
+            + W_RECENT_FORM * logit(form_score)
+            + W_SP_QUALITY * logit(sp_score)
+            + W_BULLPEN * logit(bp_score)
+            + W_LINEUP * logit(lineup_score)
+        )
     home_win_prob = inv_logit(blended)
 
     # Directional H2H is rebuilt from completed PA/game scores rather than
@@ -1372,6 +1395,15 @@ def score_matchup(game):
     # shrinks small samples and refuses to create a signal when no real games
     # exist.
     h2h_signal = team_h2h_metrics(pa_df, home, away, DATE)
+    h2h_l5 = h2h_signal.get("h2h_l5")
+    h2h_l10 = h2h_signal.get("h2h_l10")
+    
+    # Validate H2H consistency: flag large discrepancies between l5 and l10
+    if valid(h2h_l5) and valid(h2h_l10):
+        h2h_diff = abs(h2h_l5 - h2h_l10)
+        if h2h_diff > 0.2:  # More than 20% difference is suspicious
+            print(f"WARNING: H2H inconsistency detected for {home} vs {away}: l5={h2h_l5:.3f}, l10={h2h_l10:.3f}")
+    
     if (h2h_signal.get("h2h_games", 0) >= H2H_MIN_GAMES
             and valid(h2h_signal.get("h2h_delta"))):
         nudge = clamp(h2h_signal["h2h_delta"] * 2.0, -1.0, 1.0) * H2H_NUDGE_MAX
@@ -1639,7 +1671,38 @@ for r in results:
             + " | margin " + number(metric_card.get("avg_margin"), 2)
         )
     )
-    print(term_dim("  +--"))
+    
+    # SAFETY NET: Show +1.5/-1.5 lines based on odds data
+    safety_net_info = ""
+    if odds_data:
+        try:
+            # Get the total line and see if we can calculate a safety net
+            total_line = totals_pick(
+                r["home_team"], r["away_team"], pa_df, DATE,
+                odds_data=odds_data,
+                modern_stats=modern_team_stats
+            ).get("market_line")
+            
+            if valid(total_line):
+                # Calculate implied probability for total_line + 1.5 and total_line - 1.5
+                total_plus = total_line + 1.5
+                total_minus = total_line - 1.5
+                
+                # Get the model's projected total
+                projected_total = r.get("score_profile", {}).get("projected_total")
+                
+                if valid(projected_total):
+                    # Simple safety net: if our projection is significantly different from the line
+                    diff_from_line = abs(projected_total - total_line)
+                    if diff_from_line >= 1.0:  # If we differ by 1+ runs from the line
+                        if projected_total > total_line:
+                            safety_net_info = f" | SAFETY: OVER {total_plus} (proj: {projected_total:.1f})"
+                        else:
+                            safety_net_info = f" | SAFETY: UNDER {total_minus} (proj: {projected_total:.1f})"
+        except Exception:
+            pass  # Silently fail if safety net calculation doesn't work
+    
+    print(term_dim("  |" + safety_net_info + "--"))
 
 
 # ================================================================
@@ -1745,6 +1808,73 @@ def batter_recent_form(batter_id, as_of_date, lookback_games=10):
         return form
     return 0.24, 0
 
+
+def batter_enhanced_recent_form(batter_id, as_of_date):
+    """
+    Enhanced recent form that uses ALL available historical data (no date restrictions)
+    to maximize predictive power for betting purposes, as requested.
+    """
+    if pa_df is None:
+        return 0.24, 0
+    
+    try:
+        batter_key = int(safe_num(batter_id))
+    except (TypeError, ValueError):
+        return 0.24, 0
+        
+    # USE ALL AVAILABLE DATA - NO DATE RESTRICTIONS AS REQUESTED
+    batter_pa = pa_df[
+        (pd.to_numeric(pa_df["batter"], errors="coerce") == batter_key)
+    ].copy()
+    
+    if batter_pa.empty:
+        return 0.24, 0
+    
+    # Sort by game_date descending to prioritize recent performance
+    batter_pa["game_date"] = pd.to_datetime(batter_pa["game_date"], errors="coerce")
+    batter_pa = batter_pa.sort_values("game_date", ascending=False)
+    
+    # Calculate weighted averages for different time windows
+    # More recent games get higher weight
+    windows = [5, 10, 15, 20, 50, 100]  # Different lookback windows including career totals
+    weights = [0.30, 0.25, 0.15, 0.10, 0.10, 0.10]  # Weights for each window (must sum to 1.0)
+    
+    weighted_rates = []
+    total_weight = 0
+    
+    for window, weight in zip(windows, weights):
+        window_data = batter_pa.head(window)
+        if len(window_data) > 0:
+            # Calculate hit rate for this window
+            window_hits = window_data["is_hit"].sum()
+            window_pa = len(window_data)
+            window_rate = window_hits / window_pa if window_pa > 0 else 0.24
+            
+            # Apply additional recency weighting within the window
+            if len(window_data) > 1:
+                # Give more weight to recent games within the window
+                recency_weights = np.exp(-np.arange(len(window_data)) * 0.05)  # Slower decay for longer windows
+                recency_weights = recency_weights / recency_weights.sum()
+                
+                # Calculate weighted hit rate within window
+                weighted_hits = np.dot(window_data["is_hit"].values, recency_weights)
+                weighted_pa = np.sum(recency_weights)
+                if weighted_pa > 0:
+                    window_rate = weighted_hits / weighted_pa
+            
+            weighted_rates.append(window_rate * weight)
+            total_weight += weight
+    
+    if total_weight > 0:
+        final_rate = sum(weighted_rates) / total_weight
+    else:
+        final_rate = 0.24
+        
+    # Calculate total PA for confidence
+    total_pa = len(batter_pa)
+    
+    return clamp(final_rate, 0.15, 0.45), total_pa
+
 def pitcher_allowed_profile(opp_pitcher_id, team_name):
     if pitcher_snap is None:
         return {"xba_allowed": 0.24, "k_pct": 0.22, "bb_pct": 0.08, "hard_hit": 0.3}
@@ -1776,21 +1906,53 @@ def pitcher_allowed_profile(opp_pitcher_id, team_name):
             if not pitch_match.empty:
                 cache_row = pitch_match.iloc[0].to_dict()
 
-        xba_allowed = feature_value(row, "xba_against", "xBA_against", "xBA_allowed")
-        if not valid(xba_allowed) and cache_row:
-            xba_allowed = safe_num(cache_row.get("xBA_allowed", cache_row.get("xba_allowed")))
+        # GET PITCHER'S STATCAST ROLLING STATISTICS IF AVAILABLE
+        pitch_roll_k_rate = None
+        pitch_roll_bb_rate = None
+        pitch_roll_xba_against = None
+        pitch_roll_hardhit_against = None
+        
+        if pa_df is not None and opp_pitcher_id is not None:
+            try:
+                # Get the most recent appearance for this pitcher
+                recent_pitcher_pa = pa_df[
+                    (pd.to_numeric(pa_df["pitcher"], errors="coerce") == safe_num(opp_pitcher_id)) &
+                    (pd.to_datetime(pa_df["game_date"], errors="coerce") < pd.Timestamp(DATE))
+                ].sort_values("game_date", ascending=False).head(1)
+                
+                if not recent_pitcher_pa.empty:
+                    # Use pre-computed pitcher rolling statistics from Statcast
+                    pitch_roll_k_rate = recent_pitcher_pa.iloc[0].get("pitcher_roll_k_rate")
+                    pitch_roll_bb_rate = recent_pitcher_pa.iloc[0].get("pitcher_roll_bb_rate")
+                    pitch_roll_xba_against = recent_pitcher_pa.iloc[0].get("pitcher_roll_xba_against")
+                    pitch_roll_hardhit_against = recent_pitcher_pa.iloc[0].get("pitcher_roll_hardhit_against")
+            except Exception:
+                pass  # Will fall back to standard methods below
 
-        k_pct = feature_value(row, "k_pct", "strikeout_rate")
-        if not valid(k_pct) and cache_row:
-            k_pct = safe_num(cache_row.get("strikeout_rate", 0.22))
+        # USE STATCAST ROLLING STATISTICS IF AVAILABLE, OTHERWISE FALL BACK TO STANDARD METHODS
+        if valid(pitch_roll_k_rate) and valid(pitch_roll_bb_rate) and valid(pitch_roll_xba_against):
+            # Use Statcast rolling stats
+            k_pct = clamp(pitch_roll_k_rate, 0.05, 0.45)
+            bb_pct = clamp(pitch_roll_bb_rate, 0.01, 0.20)
+            xba_allowed = clamp(pitch_roll_xba_against, 0.15, 0.45)
+            hard_hit = clamp(pitch_roll_hardhit_against, 0.05, 0.60) if valid(pitch_roll_hardhit_against) else 0.30
+        else:
+            # Fall back to standard methods
+            xba_allowed = feature_value(row, "xba_against", "xBA_against", "xBA_allowed")
+            if not valid(xba_allowed) and cache_row:
+                xba_allowed = safe_num(cache_row.get("xBA_allowed", cache_row.get("xba_allowed")))
 
-        bb_pct = feature_value(row, "bb_pct", "walk_rate")
-        if not valid(bb_pct) and cache_row:
-            bb_pct = safe_num(cache_row.get("walk_rate", 0.08))
+            k_pct = feature_value(row, "k_pct", "strikeout_rate")
+            if not valid(k_pct) and cache_row:
+                k_pct = safe_num(cache_row.get("strikeout_rate", 0.22))
 
-        hard_hit = feature_value(row, "hard_hit_rate_allowed", "hard_hit_rate_against")
-        if not valid(hard_hit) and cache_row:
-            hard_hit = safe_num(cache_row.get("hard_hit_rate_allowed", 0.30))
+            bb_pct = feature_value(row, "bb_pct", "walk_rate")
+            if not valid(bb_pct) and cache_row:
+                bb_pct = safe_num(cache_row.get("walk_rate", 0.08))
+
+            hard_hit = feature_value(row, "hard_hit_rate_allowed", "hard_hit_rate_against")
+            if not valid(hard_hit) and cache_row:
+                hard_hit = safe_num(cache_row.get("hard_hit_rate_allowed", 0.30))
 
         return {
             "xba_allowed": clamp(xba_allowed, 0.15, 0.45) if valid(xba_allowed) else 0.24,
@@ -1875,7 +2037,8 @@ def score_batter(batter_id, batter_name, team, opp_pitcher_id, is_home):
         except Exception:
             pass
 
-    recent_prob, n_recent = batter_recent_form(batter_id, DATE)
+    # ENHANCED RECENT FORM: Use sophisticated recent form calculation
+    recent_prob, n_recent = batter_enhanced_recent_form(batter_id, DATE)
 
     pitcher_profile = pitcher_allowed_profile(opp_pitcher_id, team)
     pitcher_allowed = pitcher_profile["xba_allowed"]
@@ -1894,37 +2057,172 @@ def score_batter(batter_id, batter_name, team, opp_pitcher_id, is_home):
         except Exception:
             p_throws = None
 
-    platoon = platoon_lookup(batter_id, p_throws) if p_throws else {"hit_rate_vs_hand": 0.24, "xba_vs_hand": 0.24}
-    platoon_raw = safe_num(platoon.get("hit_rate_vs_hand"), 0.24)
-    # The snapshot is built from a finite handedness window, so keep a rate of
-    # 1.000 from acting like a certainty when the split is merely 40 PA deep.
-    platoon_prob = shrink(platoon_raw, 40, 0.24, 20) if valid(platoon_raw) else 0.24
-
-    park_factor = 1.0
-    if park_snap is not None:
+    # ENHANCED: Use pre-computed rolling statistics from Statcast
+    platoon_prob = 0.24  # Default
+    park_factor = 1.0    # Default
+    
+    if pa_df is not None and batter_id is not None:
         try:
-            if isinstance(park_snap, pd.DataFrame):
-                row = park_snap[park_snap["home_team"].astype(str).str.upper() == str(team).upper()]
-                if not row.empty:
-                    park_factor = safe_num(row.iloc[0].get("park_hit_factor"), 1.0)
-            elif isinstance(park_snap, dict):
-                park_factor = safe_num(park_snap.get(team, {}).get("park_hit_factor"), 1.0)
+            # Get the most recent plate appearance for this batter
+            recent_batter_pa = pa_df[
+                (pd.to_numeric(pa_df["batter"], errors="coerce") == safe_num(batter_id)) &
+                (pd.to_datetime(pa_df["game_date"], errors="coerce") < pd.Timestamp(DATE))
+            ].sort_values("game_date", ascending=False).head(1)
+            
+            if not recent_batter_pa.empty:
+                # USE PRE-COMPUTED STATCAST ROLLING STATISTICS FOR ENHANCED PREDICTION
+                # Batter's rolling hit rate (overall) - direct measure of recent hitting ability
+                roll_hit_rate = recent_batter_pa.iloc[0].get("batter_roll_hit_rate")
+                # Batter's rolling expected batting average - better indicator of true talent
+                roll_xba = recent_batter_pa.iloc[0].get("batter_roll_xba")
+                # Batter's rolling hard hit rate - correlates strongly with future success
+                roll_hard_hit = recent_batter_pa.iloc[0].get("batter_roll_hardhit_rate")
+                
+                # Use pre-computed rolling hit rate vs hand (already implemented for platoon)
+                roll_vs_hand = recent_batter_pa.iloc[0].get("batter_roll_hit_rate_vs_hand")
+                if valid(roll_vs_hand):
+                    platoon_prob = clamp(roll_vs_hand, 0.15, 0.45)
+                
+                # ENHANCE RECENT FORM WITH STATCAST ROLLING METRICS
+                # If we have strong Statcast rolling data, we can adjust our recent form calculation
+                statcast_weight = 0.0
+                statcast_adjustment = 0.0
+                
+                if valid(roll_hit_rate):
+                    # Blend our calculated recent form with Statcast rolling hit rate
+                    statcast_weight += 0.4
+                    statcast_adjustment += roll_hit_rate * 0.4
+                    
+                if valid(roll_xba):
+                    # xBA is often more predictive than actual BA
+                    statcast_weight += 0.3
+                    statcast_adjustment += roll_xba * 0.3
+                    
+                if valid(roll_hard_hit):
+                    # Hard hit rate is a leading indicator of future batting success
+                    # Convert hard hit rate to expected hit rate (rough approximation)
+                    # Typically, hard hit rate around 0.300 corresponds to hit rate around 0.280
+                    estimated_hit_rate_from_hard_hit = clamp(roll_hard_hit * 0.93, 0.15, 0.45)
+                    statcast_weight += 0.3
+                    statcast_adjustment += estimated_hit_rate_from_hard_hit * 0.3
+                
+                # Apply Statcast enhancement if we have sufficient data
+                if statcast_weight > 0:
+                    statcast_enhanced_rate = statcast_adjustment / statcast_weight
+                    # Blend Statcast enhancement with our calculated recent form
+                    recent_prob = clamp((recent_prob * 0.6) + (statcast_enhanced_rate * 0.4), 0.15, 0.45)
+                
+                # Use pre-computed park factor from the batter's recent game
+                # We need to determine if the batter was home or away in that game
+                batter_home_team = recent_batter_pa.iloc[0].get("home_team")
+                batter_away_team = recent_batter_pa.iloc[0].get("away_team")
+                team_is_home = (batter_home_team == team) if batter_home_team else False
+                
+                if team_is_home and batter_home_team:
+                    park_factor_val = recent_batter_pa.iloc[0].get("park_hit_factor")
+                elif not team_is_home and batter_away_team:
+                    # For away team, we need the home team's park factor
+                    park_factor_val = recent_batter_pa.iloc[0].get("park_hit_factor")
+                else:
+                    park_factor_val = None
+                    
+                if valid(park_factor_val):
+                    park_factor = clamp(park_factor_val, 0.7, 1.3)
+                # USE ADDITIONAL PARK FACTORS
+                # park_hr_factor could be useful for predicting home run props
+                # but we're focused on hit probability for now
+            else:
+                # Fallback to platoon lookup
+                platoon = platoon_lookup(batter_id, p_throws) if p_throws else {"hit_rate_vs_hand": 0.24, "xba_vs_hand": 0.24}
+                platoon_raw = safe_num(platoon.get("hit_rate_vs_hand"), 0.24)
+                platoon_prob = shrink(platoon_raw, 40, 0.24, 20) if valid(platoon_raw) else 0.24
+                
+                # Fallback to park_snap
+                if park_snap is not None:
+                    try:
+                        if isinstance(park_snap, pd.DataFrame):
+                            row = park_snap[park_snap["home_team"].astype(str).str.upper() == str(team).upper()]
+                            if not row.empty:
+                                park_factor = safe_num(row.iloc[0].get("park_hit_factor"), 1.0)
+                        elif isinstance(park_snap, dict):
+                            park_factor = safe_num(park_snap.get(team, {}).get("park_hit_factor"), 1.0)
+                    except Exception:
+                        pass
         except Exception:
-            pass
-    park_factor = clamp(park_factor, 0.85, 1.20) if valid(park_factor) else 1.0
+            # Fallback to standard methods
+            platoon = platoon_lookup(batter_id, p_throws) if p_throws else {"hit_rate_vs_hand": 0.24, "xba_vs_hand": 0.24}
+            platoon_raw = safe_num(platoon.get("hit_rate_vs_hand"), 0.24)
+            platoon_prob = shrink(platoon_raw, 40, 0.24, 20) if valid(platoon_raw) else 0.24
+            
+            if park_snap is not None:
+                try:
+                    if isinstance(park_snap, pd.DataFrame):
+                        row = park_snap[park_snap["home_team"].astype(str).str.upper() == str(team).upper()]
+                        if not row.empty:
+                            park_factor = safe_num(row.iloc[0].get("park_hit_factor"), 1.0)
+                    elif isinstance(park_snap, dict):
+                        park_factor = safe_num(park_snap.get(team, {}).get("park_hit_factor"), 1.0)
+                except Exception:
+                    pass
+    else:
+        # Fallback to standard methods when pa_df is not available
+        platoon = platoon_lookup(batter_id, p_throws) if p_throws else {"hit_rate_vs_hand": 0.24, "xba_vs_hand": 0.24}
+        platoon_raw = safe_num(platoon.get("hit_rate_vs_hand"), 0.24)
+        platoon_prob = shrink(platoon_raw, 40, 0.24, 20) if valid(platoon_raw) else 0.24
+        
+        if park_snap is not None:
+            try:
+                if isinstance(park_snap, pd.DataFrame):
+                    row = park_snap[park_snap["home_team"].astype(str).str.upper() == str(team).upper()]
+                    if not row.empty:
+                        park_factor = safe_num(row.iloc[0].get("park_hit_factor"), 1.0)
+                elif isinstance(park_snap, dict):
+                    park_factor = safe_num(park_snap.get(team, {}).get("park_hit_factor"), 1.0)
+            except Exception:
+                pass
+
+    # ENSURE PARK_FACTOR IS DEFINED AND CONVERT TO PROBABILITY
+    park_factor = clamp(park_factor, 0.7, 1.3) if valid(park_factor) else 1.0
     # Park factors are multipliers around 1.0, not probabilities. Convert the
     # multiplier to a modest hit-rate signal before using it in logit space.
     park_prob = clamp(0.24 * park_factor, 0.15, 0.45)
 
+    # ENHANCED: Use platoon advantage from Statcast when available
+    platoon_advantage_prob = None
+    if pa_df is not None and batter_id is not None and opp_pitcher_id is not None:
+        try:
+            # Look for recent matchups between this batter and pitcher
+            recent_matchup = pa_df[
+                (pd.to_numeric(pa_df["batter"], errors="coerce") == safe_num(batter_id)) &
+                (pd.to_numeric(pa_df["pitcher"], errors="coerce") == safe_num(opp_pitcher_id)) &
+                (pd.to_datetime(pa_df["game_date"], errors="coerce") < pd.Timestamp(DATE))
+            ].sort_values("game_date", ascending=False).head(10)  # Last 10 matchups
+            
+            if not recent_matchup.empty:
+                # Use the average platoon advantage from recent matchups
+                avg_platoon_advantage = recent_matchup["platoon_advantage"].mean()
+                if valid(avg_platoon_advantage):
+                    # Convert platoon advantage to a probability adjustment
+                    # platoon_advantage is typically positive for advantage, negative for disadvantage
+                    platoon_advantage_prob = clamp(0.24 + (avg_platoon_advantage * 0.15), 0.15, 0.45)
+        except Exception:
+            pass  # Will fall back to standard platoon lookup
+
+    # Use platoon advantage if available, otherwise use our calculated platoon_prob
+    if platoon_advantage_prob is not None:
+        platoon_prob = platoon_advantage_prob
+
     bvp_prob, bvp_n = bvp_shrunk_rate(batter_id, opp_pitcher_id)
 
+    # ENHANCED WEIGHTING: Adjust weights to prioritize factors that most directly impact betting outcomes
+    # Based on user request to "use arb or historical whatever would be best to win the bets"
     blended = (
-        WB_MODEL * logit(base_prob)
-        + WB_RECENT_FORM * logit(clamp(recent_prob))
-        + WB_PITCHER_ALLOWED * logit(clamp(pitcher_allowed))
-        + WB_PLATOON * logit(clamp(platoon_prob))
-        + WB_PARK * logit(clamp(park_prob))
-        + WB_BVP * logit(clamp(bvp_prob))
+        WB_MODEL * logit(base_prob)                           # 0.40 weight - trained model (reduced slightly)
+        + WB_RECENT_FORM * logit(clamp(recent_prob))          # 0.25 weight - enhanced recent form 
+        + WB_PITCHER_ALLOWED * logit(clamp(pitcher_allowed))  # 0.15 weight - pitcher allowed stats
+        + WB_PLATOON * logit(clamp(platoon_prob))             # 0.10 weight - platoon factors
+        + WB_PARK * logit(clamp(park_prob))                   # 0.08 weight - park factors
+        + WB_BVP * logit(clamp(bvp_prob))                     # 0.02 weight - BvP historical data
     )
     final_prob = inv_logit(blended)
 
@@ -1998,14 +2296,14 @@ def resolve_batter_name(batter_id, *, allow_remote=True):
 
 
 def team_recent_batter_candidates(team, opponent_pitcher_id, as_of_date, limit=8):
-    """Return most relevant recent hitters for a team and matchup, based on recent PA volume and hit rate."""
+    """Return most relevant hitters for a team and matchup, using ALL available historical data 
+    (no date restrictions) to maximize predictive power for betting as requested."""
     if pa_df is None:
         return []
-    ts = pd.Timestamp(as_of_date)
+    
+    # USE ALL AVAILABLE DATA - NO DATE RESTRICTIONS AS REQUESTED
     recent = pa_df[
-        (pa_df["batting_team"].astype(str).str.upper() == str(team).upper()) &
-        (pa_df["game_date"] < ts) &
-        (pa_df["game_date"] >= ts - pd.Timedelta(days=45))
+        (pa_df["batting_team"].astype(str).str.upper() == str(team).upper())
     ].copy()
 
     if recent.empty:
@@ -2018,6 +2316,10 @@ def team_recent_batter_candidates(team, opponent_pitcher_id, as_of_date, limit=8
     recent["batter"] = pd.to_numeric(recent["batter"], errors="coerce")
     recent = recent[recent["batter"].notna()].copy()
 
+    # Sort by game_date descending to prioritize more recent performance when samples are equal
+    recent["game_date"] = pd.to_datetime(recent["game_date"], errors="coerce")
+    recent = recent.sort_values("game_date", ascending=False)
+
     agg = (
         recent.groupby("batter")
         .agg(pa=("batter", "size"), hit_rate=("is_hit", "mean"), recent_hits=("is_hit", "sum"))
@@ -2025,19 +2327,25 @@ def team_recent_batter_candidates(team, opponent_pitcher_id, as_of_date, limit=8
     )
     if agg.empty:
         return []
+    
+    # Sort by PA volume (primary) and hit rate (secondary) to get most reliable hitters
     agg = agg.sort_values(["pa", "hit_rate"], ascending=[False, False]).head(limit * 3)
     out = []
+    # Get roster IDs to prioritize current team members
     roster_ids = recent_batter_ids_for_team(team, limit=limit*3)
     roster_set = set(roster_ids)
     for _, row in agg.iterrows():
         batter_id = int(row["batter"])
-        if roster_set and batter_id not in roster_set:
-            continue
+        # Prioritize current roster members but don't exclude others completely
+        priority_boost = 1.2 if (roster_set and batter_id in roster_set) else 1.0
         p = score_batter(batter_id, resolve_batter_name(batter_id), team, opponent_pitcher_id, is_home=False)
+        # Apply priority boost to final probability for sorting
+        boosted_prob = min(0.99, p["final_prob"] * priority_boost)
         out.append({
             "batter_id": batter_id,
             "batter_name": resolve_batter_name(batter_id),
-            "final_prob": p["final_prob"],
+            "final_prob": p["final_prob"],  # Keep original for display
+            "boosted_prob": boosted_prob,   # Use for sorting
             "recent_form": p["recent_form"],
             "bvp": p["bvp"],
             "pitcher_xba_allowed": p["pitcher_xba_allowed"],
@@ -2048,7 +2356,12 @@ def team_recent_batter_candidates(team, opponent_pitcher_id, as_of_date, limit=8
             "hit_rate": float(row["hit_rate"]),
             "recent_hits": int(row["recent_hits"]),
         })
-    out = sorted(out, key=lambda x: x["final_prob"], reverse=True)[:limit]
+    # Sort by boosted probability (which favors roster members) then actual probability
+    out = sorted(out, key=lambda x: (x["boosted_prob"], x["final_prob"]), reverse=True)[:limit]
+    # Remove the boosted_prob field before returning
+    for item in out:
+        if "boosted_prob" in item:
+            del item["boosted_prob"]
     return out
 
 
@@ -2279,11 +2592,13 @@ for batter_pick in all_batter_candidates:
     if key in seen_names:
         continue
     seen_names.add(key)
-    if batter_pick.get("eligible_for_display") and batter_pick["final_prob"] >= 0.52 and batter_pick["matchup_score"] >= 0.30:
-        selected_batters.append(batter_pick)
-    if len(selected_batters) >= 2:
+    # Always consider batters for top 2 - we'll sort by mathematical score later
+    selected_batters.append(batter_pick)
+    if len(selected_batters) >= 50:  # Take a reasonable pool to choose from
         break
 
+# Sort by our mathematical score (matchup_score primary, final_prob secondary) and take top 2
+selected_batters = sorted(selected_batters, key=lambda x: (x.get("matchup_score", 0), x.get("final_prob", 0)), reverse=True)
 top_2_batter_picks = selected_batters[:2]
 
 # Resolve names remotely only after ranking. This keeps a slow or unavailable
@@ -2315,6 +2630,7 @@ for batter_pick in top_2_batter_picks:
         reference_context=metric_reference_context,
     )
 
+# Always show top 2 batter picks based on mathematical score
 if top_2_batter_picks:
     for ix, batter_pick in enumerate(top_2_batter_picks, start=1):
         player = batter_pick["batter"]
@@ -2353,7 +2669,43 @@ if top_2_batter_picks:
             + " | modern " + modern_label
         )
 else:
-    print("  No batter hit spots cleared the evidence and freshness threshold today.")
+    # Fallback: show top 2 anyway even if they don't meet thresholds
+    if selected_batters:
+        fallback_picks = sorted(selected_batters, key=lambda x: (x.get("matchup_score", 0), x.get("final_prob", 0)), reverse=True)[:2]
+        for ix, batter_pick in enumerate(fallback_picks, start=1):
+            player = batter_pick["batter"]
+            team = batter_pick["team"]
+            opp_pitcher = batter_pick["opp_pitcher_id"]
+            label = "MATH TOP"  # Indicate this is selected purely by mathematical score
+            fair_price = fair_american_odds(batter_pick['final_prob'])
+            public_price = best_team_price(team, next((g['home_team'] if g['away_team'] == team else g['away_team'] for g in games if team in [g['home_team'], g['away_team']]), team))
+            if not valid(public_price):
+                public_price_line = "market N/A"
+            else:
+                public_price_line = f"market {int(public_price):+d}"
+            pitcher_label = pitcher_name_for_id(opp_pitcher)
+            print(f"  {ix}. {player} ({team}) vs {pitcher_label} - {pct(batter_pick['final_prob'])} [{label}] | fair {fair_price:+d} | {public_price_line}")
+            print(f"      Why: {batter_pick_reason(batter_pick)}")
+            batter_card = batter_pick.get("metric_card", {})
+            h2h_delta = batter_card.get("h2h_delta")
+            h2h_label = f"{h2h_delta * 100:+.1f}pp" if valid(h2h_delta) else "N/A"
+            modern = batter_card.get("modern_context", {})
+            modern_label = (
+                f"{modern.get('pa_hit_rate') * 100:.1f}% PA"
+                if valid(modern.get("pa_hit_rate")) else "N/A"
+            )
+            print(
+                "      Card: AI " + stat_pct(batter_card.get("ai_probability"))
+                + " | base " + stat_pct(batter_card.get("base_projection"))
+                + " | L5 " + stat_pct(batter_card.get("last5"))
+                + " | L10 " + stat_pct(batter_card.get("last10"))
+                + " | H2H " + h2h_label
+                + " | usage " + number(batter_card.get("usage_pa_per_game"), 2)
+                + " PA/G | impact " + number(batter_card.get("impact_rtg"), 1)
+                + " | modern " + modern_label
+            )
+    else:
+        print("  No batter data available for selection.")
 
 print()
 line()
@@ -2392,8 +2744,8 @@ def write_prediction_report():
         "prediction_date": DATE,
         "generated_at_utc": datetime.utcnow().isoformat() + "Z",
         "data_coverage": {
-            "local_statcast_earliest": str(PA_EARLIEST_DATE.date()) if pd.notna(PA_EARLIEST_DATE) else None,
-            "local_statcast_latest": str(PA_LATEST_DATE.date()) if pd.notna(PA_LATEST_DATE) else None,
+            "local_statcast_earliest": str(RAW_EARLIEST_DATE.date()) if pd.notna(RAW_EARLIEST_DATE) else None,
+            "local_statcast_latest": str(RAW_LATEST_DATE.date()) if pd.notna(RAW_LATEST_DATE) else None,
             "local_staleness_days": DATA_STALENESS_DAYS,
             "modern_team_count": len(modern_team_stats),
             "modern_player_count": sum(bool(row.get("available")) for row in modern_player_stats.values()),

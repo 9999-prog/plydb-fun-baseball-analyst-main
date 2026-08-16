@@ -1,26 +1,35 @@
-# Secrets and local configuration
+# Environment & secrets
 .env
-.env.*
-!.env.example
+*.env
 
-# Python caches and local test output
+# Model artifacts
+*.joblib
+*.pkl
+*.model
+
+# Data files
+data/**/*.parquet
+data/**/*.csv
+!data/pybaseball/statcast/.gitkeep
+
+# Reports & outputs
+prediction_report.json
+*.log
+
+# Python
 __pycache__/
 *.py[cod]
+*.so
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Local audit/report output
-audit.json
-*.log
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# Generated Statcast and feature tables. These files are large, reproducible
-# local inputs/outputs and should not be pushed to a normal GitHub repository.
-# Keep the small trained joblib artifacts tracked when they are useful for a
-# ready-to-run checkout; rebuild the parquet inputs locally when needed.
-data/pybaseball/statcast/*.parquet
-prediction_report.json
-*.zip
-out.txt
-.mypy_cache/
-.ruff_cache/
+# OS
+.DS_Store
+Thumbs.db
