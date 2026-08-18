@@ -1,0 +1,886 @@
+"""
+Advanced ML Integration Module
+
+Combines three external packages:
+1. sports-betting (ClassifierBettor for backtesting)
+2. MLB-Game-Winner-Predictor (Gradient Boosting ensemble with Statcast features)
+3. DojoZero (agent framework for live prediction games)
+
+This module enhances the plydb-fun-baseball-analyst-main project with:
+- Advanced ML models (XGBoost, Gradient Boosting, MLP, SVC, NearestCentroid)
+- Sports betting backtesting and evaluation
+- Live agent framework for prediction competitions
+- Ensemble prediction with confidence calibration
+"""
+
+import os
+import sys
+import json
+import warnings
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Tuple
+import numpy as np
+import pandas as pd
+import joblib
+
+# Suppress warnings
+warnings.filterwarnings("ignore")
+
+# ============================================================
+# PACKAGE 1: sports-betting integration
+# ============================================================
+try:
+    from sportsbet.evaluation import ClassifierBettor
+    from sportsbet.datasets import load as load_dataset
+    SPORTSBET_AVAILABLE = True
+    print("[OK] sports-betting available: ClassifierBettor, SoccerDataLoader")
+except ImportError as e:
+    SPORTSBET_AVAILABLE = False
+    print(f"[WARN] sports-betting not fully available: {e}")
+
+# ============================================================
+# PACKAGE 2: MLB-Game-Winner-Predictor integration
+# ============================================================
+try:
+    from xgboost import XGBClassifier
+    from sklearn.ensemble import GradientBoostingClassifier
+    from sklearn.neural_network import MLPClassifier
+    from sklearn.svm import SVC
+    from sklearn.neighbors import NearestCentroid
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.model_selection import train_test_split, GridSearchCV
+    from sklearn.metrics import accuracy_score, log_loss, brier_score_loss
+    MLB_MODELS_AVAILABLE = True
+    print("[OK] MLB models available: XGBoost, GradientBoosting, MLP, SVC, NearestCentroid")
+except ImportError as e:
+    MLB_MODELS_AVAILABLE = False
+    print(f"[WARN] MLB models not available: {e}")
+
+# ============================================================
+# PACKAGE 3: DojoZero integration
+# ============================================================
+DOJOZERO_AVAILABLE = False
+try:
+    import dojozero_client as dz_client
+    DOJOZERO_AVAILABLE = True
+    print("[OK] dojozero-client available")
+except ImportError:
+    # DojoZero client not installed, but we can still use the patterns
+    pass
+
+# ============================================================
+# Local project imports
+# ============================================================
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import get_config
+from logging_utils import setup_logging, PredictionLogger, LogTimer
+
+logger = setup_logging("advanced_ml_integration")
+pred_logger = PredictionLogger(logger)
+
+# ============================================================
+# FEATURE ENGINEERING (from MLB-Game-Winner-Predictor)
+# ============================================================
+
+STATCAST_FEATURES = [
+    # Batting features
+    'h_batting_xwoba', 'h_batting_k_pct', 'h_batting_bb_pct',
+    'h_batting_hardhit_pct', 'h_batting_barrels_pa_pct',
+    'h_batting_launch_speed', 'h_batting_bat_speed',
+    'v_batting_xwoba', 'v_batting_k_pct', 'v_batting_bb_pct',
+    'v_batting_hardhit_pct', 'v_batting_barrels_pa_pct',
+    'v_batting_launch_speed', 'v_batting_bat_speed',
+    # Pitching features
+    'h_pitching_xwoba', 'h_pitching_k_pct', 'h_pitching_bb_pct',
+    'h_pitching_barrels_bbe_pct', 'h_pitching_velocity',
+    'h_pitching_spin_rate', 'h_pitching_swing_miss_pct',
+    'v_pitching_xwoba', 'v_pitching_k_pct', 'v_pitching_bb_pct',
+    'v_pitching_barrels_bbe_pct', 'v_pitching_velocity',
+    'v_pitching_spin_rate', 'v_pitching_swing_miss_pct',
+    # Contextual
+    'day_night',
+    # Team one-hot (30 teams)
+    'ARI', 'ATL', 'BAL', 'BOS', 'CHC', 'CHW', 'CIN', 'CLE', 'COL',
+    'DET', 'HOU', 'KC', 'LAA', 'LAD', 'MIA', 'MIL', 'MIN', 'NYM',
+    'NYY', 'OAK', 'PHI', 'PIT', 'SD', 'SF', 'SEA', 'STL', 'TB',
+    'TEX', 'TOR', 'WSH'
+]
+
+TEAM_ABBR_TO_INDEX = {team: i for i, team in enumerate(STATCAST_FEATURES[27:], start=27)}
+
+class MLBFeatureEngineer:
+    """Creates features from Statcast data matching MLB-Game-Winner-Predictor."""
+    
+    def __init__(self):
+        self.scaler = StandardScaler()
+        self.feature_names = STATCAST_FEATURES
+        self.is_fitted = False
+    
+    def create_matchup_features(self, home_team: str, away_team: str, 
+                                 home_stats: Dict, away_stats: Dict,
+                                 is_day_game: bool = False) -> np.ndarray:
+        """
+        Create feature vector for a single matchup.
+        Returns (1, n_features) array.
+        """
+        features = {}
+        
+        # Batting features
+        for prefix, stats in [('h_', home_stats), ('v_', away_stats)]:
+            features[f'{prefix}batting_xwoba'] = stats.get('xwoba', 0.320)
+            features[f'{prefix}batting_k_pct'] = stats.get('k_pct', 0.23)
+            features[f'{prefix}batting_bb_pct'] = stats.get('bb_pct', 0.08)
+            features[f'{prefix}batting_hardhit_pct'] = stats.get('hardhit_pct', 0.40)
+            features[f'{prefix}batting_barrels_pa_pct'] = stats.get('barrels_pa_pct', 0.08)
+            features[f'{prefix}batting_launch_speed'] = stats.get('launch_speed', 90.0)
+            features[f'{prefix}batting_bat_speed'] = stats.get('bat_speed', 72.0)
+        
+        # Pitching features
+        for prefix, stats in [('h_', home_stats), ('v_', away_stats)]:
+            # Note: home pitching faces away batters, so use away team's opponent stats
+            features[f'{prefix}pitching_xwoba'] = stats.get('pitching_xwoba', 0.320)
+            features[f'{prefix}pitching_k_pct'] = stats.get('pitching_k_pct', 0.23)
+            features[f'{prefix}pitching_bb_pct'] = stats.get('pitching_bb_pct', 0.08)
+            features[f'{prefix}pitching_barrels_bbe_pct'] = stats.get('barrels_bbe_pct', 0.08)
+            features[f'{prefix}pitching_velocity'] = stats.get('velocity', 92.0)
+            features[f'{prefix}pitching_spin_rate'] = stats.get('spin_rate', 2300)
+            features[f'{prefix}pitching_swing_miss_pct'] = stats.get('swing_miss_pct', 25.0)
+        
+        # Contextual
+        features['day_night'] = 1 if is_day_game else 0
+        
+        # Team one-hot encoding - include ALL teams from feature_names
+        for team in self.feature_names[27:]:
+            features[team] = 1 if team in [home_team, away_team] else 0
+        
+        # Convert to array in correct order - ensure all features present
+        feature_vector = np.array([[features.get(f, 0) for f in self.feature_names]])
+        
+        return feature_vector
+    
+    def fit_scaler(self, X: np.ndarray):
+        """Fit scaler on training data."""
+        self.scaler.fit(X)
+        self.is_fitted = True
+    
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        """Scale features."""
+        if not self.is_fitted:
+            self.fit_scaler(X)
+        return self.scaler.transform(X)
+
+# ============================================================
+# ENSEMBLE MODEL (from MLB-Game-Winner-Predictor)
+# ============================================================
+
+class MLBEnsemblePredictor:
+    """
+    Ensemble predictor using multiple ML models:
+    - Gradient Boosting (best at 60.45%)
+    - XGBoost
+    - MLP
+    - SVC
+    - NearestCentroid
+    
+    Uses majority voting with confidence weighting.
+    """
+    
+    def __init__(self):
+        self.models = {}
+        self.feature_engineer = MLBFeatureEngineer()
+        self.is_trained = False
+        self.model_weights = {
+            'gradient_boosting': 0.30,
+            'xgboost': 0.25,
+            'mlp': 0.20,
+            'svc': 0.15,
+            'nearest_centroid': 0.10
+        }
+    
+    def initialize_models(self):
+        """Initialize all models with optimal hyperparameters."""
+        if not MLB_MODELS_AVAILABLE:
+            raise ImportError("ML models not available")
+        
+        self.models = {
+            'gradient_boosting': GradientBoostingClassifier(
+                n_estimators=200,
+                learning_rate=0.05,
+                max_depth=4,
+                min_samples_split=10,
+                min_samples_leaf=5,
+                subsample=0.8,
+                random_state=42
+            ),
+            'xgboost': XGBClassifier(
+                n_estimators=200,
+                max_depth=4,
+                learning_rate=0.05,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                eval_metric='logloss',
+                random_state=42
+            ),
+            'mlp': MLPClassifier(
+                hidden_layer_sizes=(128, 64, 32),
+                activation='relu',
+                solver='adam',
+                alpha=0.001,
+                learning_rate='adaptive',
+                max_iter=500,
+                early_stopping=True,
+                validation_fraction=0.1,
+                random_state=42
+            ),
+            'svc': SVC(
+                kernel='rbf',
+                C=1.0,
+                gamma='scale',
+                probability=True,
+                random_state=42
+            ),
+            'nearest_centroid': NearestCentroid(
+                metric='euclidean',
+                shrink_threshold=None
+            )
+        }
+    
+    def train(self, X: np.ndarray, y: np.ndarray, 
+              optimize_xgb: bool = False) -> Dict[str, float]:
+        """
+        Train all models and return validation metrics.
+        """
+        if not self.models:
+            self.initialize_models()
+        
+        # Split for validation
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+        
+        # Fit scaler
+        self.feature_engineer.fit_scaler(X_train)
+        X_train_scaled = self.feature_engineer.transform(X_train)
+        X_val_scaled = self.feature_engineer.transform(X_val)
+        
+        results = {}
+        
+        for name, model in self.models.items():
+            print(f"Training {name}...")
+            try:
+                if name == 'xgboost' and optimize_xgb:
+                    # Quick grid search for XGBoost
+                    param_grid = {
+                        'n_estimators': [100, 200],
+                        'max_depth': [3, 4, 5],
+                        'learning_rate': [0.05, 0.1]
+                    }
+                    grid = GridSearchCV(
+                        XGBClassifier(random_state=42, eval_metric='logloss'),
+                        param_grid, cv=3, scoring='accuracy', n_jobs=-1
+                    )
+                    grid.fit(X_train_scaled, y_train)
+                    model = grid.best_estimator_
+                    self.models[name] = model
+                    print(f"  Best XGB params: {grid.best_params_}")
+                else:
+                    model.fit(X_train_scaled, y_train)
+                
+                # Validate
+                y_pred = model.predict(X_val_scaled)
+                y_proba = model.predict_proba(X_val_scaled)[:, 1] if hasattr(model, 'predict_proba') else None
+                
+                acc = accuracy_score(y_val, y_pred)
+                results[name] = {
+                    'accuracy': acc,
+                    'log_loss': log_loss(y_val, y_proba) if y_proba is not None else None,
+                    'brier': brier_score_loss(y_val, y_proba) if y_proba is not None else None
+                }
+                print(f"  {name}: accuracy={acc:.4f}")
+                
+            except Exception as e:
+                print(f"  {name} failed: {e}")
+                results[name] = {'error': str(e)}
+        
+        self.is_trained = True
+        return results
+    
+    def predict(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Dict]:
+        """
+        Predict using ensemble.
+        Returns: (predictions, probabilities, model_details)
+        """
+        if not self.is_trained:
+            raise ValueError("Model not trained")
+        
+        X_scaled = self.feature_engineer.transform(X)
+        
+        predictions = {}
+        probabilities = {}
+        
+        for name, model in self.models.items():
+            try:
+                pred = model.predict(X_scaled)
+                proba = model.predict_proba(X_scaled)[:, 1] if hasattr(model, 'predict_proba') else None
+                
+                predictions[name] = pred
+                if proba is not None:
+                    probabilities[name] = proba
+            except Exception as e:
+                print(f"Prediction failed for {name}: {e}")
+        
+        # Weighted ensemble prediction
+        weighted_probs = np.zeros(len(X_scaled))
+        total_weight = 0
+        
+        for name, proba in probabilities.items():
+            weight = self.model_weights.get(name, 0.1)
+            weighted_probs += proba * weight
+            total_weight += weight
+        
+        if total_weight > 0:
+            ensemble_proba = weighted_probs / total_weight
+        else:
+            ensemble_proba = np.full(len(X_scaled), 0.5)
+        
+        ensemble_pred = (ensemble_proba > 0.5).astype(int)
+        
+        # Model agreement
+        pred_matrix = np.column_stack([predictions[name] for name in predictions])
+        agreement = np.mean(pred_matrix == pred_matrix[:, 0:1], axis=1)
+        
+        return ensemble_pred, ensemble_proba, {
+            'individual_predictions': predictions,
+            'individual_probabilities': probabilities,
+            'ensemble_probability': ensemble_proba,
+            'model_agreement': agreement,
+            'weights_used': self.model_weights
+        }
+    
+    def save(self, path: str):
+        """Save trained models."""
+        joblib.dump({
+            'models': self.models,
+            'feature_engineer': self.feature_engineer,
+            'model_weights': self.model_weights,
+            'is_trained': self.is_trained
+        }, path)
+    
+    @classmethod
+    def load(cls, path: str):
+        """Load trained models."""
+        data = joblib.load(path)
+        predictor = cls()
+        predictor.models = data['models']
+        predictor.feature_engineer = data['feature_engineer']
+        predictor.model_weights = data['model_weights']
+        predictor.is_trained = data['is_trained']
+        return predictor
+
+
+# ============================================================
+# SPORTS-BETTING BACKTESTING (ClassifierBettor)
+# ============================================================
+
+class BettingBacktester:
+    """
+    Uses sports-betting's ClassifierBettor for backtesting
+    and finding value bets.
+    """
+    
+    def __init__(self, predictor: MLBEnsemblePredictor):
+        self.predictor = predictor
+        self.bettor = None
+        self.backtest_results = None
+    
+    def prepare_bettor(self, X: np.ndarray, y: np.ndarray):
+        """Prepare ClassifierBettor with trained predictor."""
+        if not SPORTSBET_AVAILABLE:
+            print("[WARN] sports-betting not available for backtesting")
+            return None
+        
+        # Create a wrapper that uses our ensemble
+        class EnsembleWrapper:
+            def __init__(self, predictor):
+                self.predictor = predictor
+            
+            def predict_proba(self, X):
+                _, proba, _ = self.predictor.predict(X)
+                # Return as [prob_class_0, prob_class_1]
+                return np.column_stack([1 - proba, proba])
+            
+            def predict(self, X):
+                pred, _, _ = self.predictor.predict(X)
+                return pred
+        
+        wrapper = EnsembleWrapper(self.predictor)
+        
+        # ClassifierBettor expects a scikit-learn compatible estimator
+        self.bettor = ClassifierBettor(
+            estimator=wrapper,
+            threshold=0.02,  # Minimum edge to bet
+            commission=0.0   # No commission for simulation
+        )
+        
+        return self.bettor
+    
+    def backtest(self, X: np.ndarray, y: np.ndarray, 
+                 odds: np.ndarray) -> Dict:
+        """
+        Run backtest using ClassifierBettor.
+        
+        Args:
+            X: Features
+            y: True labels (0=away wins, 1=home wins)
+            odds: Decimal odds for home team (shape: n_samples)
+        
+        Returns:
+            Backtest results dict
+        """
+        if not self.bettor:
+            self.prepare_bettor(X, y)
+        
+        if not self.bettor:
+            return {'error': 'Bettor not available'}
+        
+        # ClassifierBettor backtest
+        try:
+            # This is a simplified version - sports-betting has more features
+            # For full backtest, use the library's built-in methods
+            
+            # Get predictions
+            pred, proba, details = self.predictor.predict(X)
+            
+            # Calculate implied probabilities from odds
+            implied_prob = 1 / odds
+            edge = proba - implied_prob
+            
+            # Find value bets
+            value_bets = edge > 0.02  # 2% minimum edge
+            
+            # Simulate betting
+            if value_bets.any():
+                bet_proba = proba[value_bets]
+                bet_odds = odds[value_bets]
+                bet_true = y[value_bets]
+                bet_pred = pred[value_bets]
+                
+                # Kelly criterion bet sizing (fraction of bankroll)
+                kelly = (bet_proba * bet_odds - 1) / (bet_odds - 1)
+                kelly = np.clip(kelly, 0, 0.25)  # Cap at 25% Kelly
+                
+                # Returns
+                wins = (bet_pred == bet_true)
+                returns = np.where(wins, kelly * (bet_odds - 1), -kelly)
+                
+                total_return = np.sum(returns)
+                roi = total_return / np.sum(kelly) if np.sum(kelly) > 0 else 0
+                win_rate = np.mean(wins)
+                
+                return {
+                    'total_bets': int(value_bets.sum()),
+                    'total_return': float(total_return),
+                    'roi': float(roi),
+                    'win_rate': float(win_rate),
+                    'avg_edge': float(np.mean(edge[value_bets])),
+                    'max_edge': float(np.max(edge[value_bets])),
+                    'sharpe': float(np.mean(returns) / np.std(returns)) if np.std(returns) > 0 else 0
+                }
+            else:
+                return {
+                    'total_bets': 0,
+                    'message': 'No value bets found'
+                }
+        except Exception as e:
+            return {'error': str(e)}
+
+
+# ============================================================
+# DOJOZERO AGENT PATTERN ADAPTER
+# ============================================================
+
+class DojoZeroStyleAgent:
+    """
+    Adapts DojoZero's agent pattern for our baseball predictor.
+    
+    DojoZero agents:
+    - Connect to live data streams
+    - Monitor events and odds in real-time
+    - Place predictions based on reasoning
+    - Track performance on leaderboard
+    
+    Our adaptation:
+    - Uses sports-skills for live MLB data
+    - Uses our ensemble model for predictions
+    - Tracks predictions and accuracy
+    - Can participate in prediction competitions
+    """
+    
+    def __init__(self, predictor: MLBEnsemblePredictor):
+        self.predictor = predictor
+        self.predictions_log = []
+        self.balance = 10000  # Virtual balance
+        self.bet_history = []
+    
+    def analyze_game(self, game_data: Dict) -> Dict:
+        """
+        Analyze a game using all available data.
+        Returns prediction with reasoning.
+        """
+        home = game_data.get('home_team', '')
+        away = game_data.get('away_team', '')
+        odds = game_data.get('odds', {})
+        
+        # Get features (would come from live data in production)
+        features = self.predictor.feature_engineer.create_matchup_features(
+            home, away, 
+            game_data.get('home_stats', {}),
+            game_data.get('away_stats', {}),
+            game_data.get('is_day_game', False)
+        )
+        
+        # Get ensemble prediction
+        pred, proba, details = self.predictor.predict(features)
+        
+        # Analyze odds if available
+        odds_analysis = None
+        if odds:
+            home_odds = odds.get('moneyline', {}).get('home')
+            away_odds = odds.get('moneyline', {}).get('away')
+            if home_odds and away_odds:
+                implied_home = 1 / self._american_to_decimal(home_odds)
+                implied_away = 1 / self._american_to_decimal(away_odds)
+                total = implied_home + implied_away
+                fair_home = implied_home / total
+                edge = proba[0] - fair_home
+                odds_analysis = {
+                    'home_odds': home_odds,
+                    'away_odds': away_odds,
+                    'fair_home_prob': fair_home,
+                    'model_prob': float(proba[0]),
+                    'edge': float(edge),
+                    'value_bet': edge > 0.02
+                }
+        
+        return {
+            'game_id': game_data.get('game_id', ''),
+            'home_team': home,
+            'away_team': away,
+            'prediction': int(pred[0]),
+            'predicted_winner': home if pred[0] == 1 else away,
+            'confidence': float(proba[0]),
+            'model_agreement': float(details['model_agreement'][0]),
+            'odds_analysis': odds_analysis,
+            'individual_models': details['individual_probabilities'],
+            'reasoning': self._generate_reasoning(details, odds_analysis)
+        }
+    
+    def _american_to_decimal(self, american_odds: str) -> float:
+        """Convert American odds to decimal."""
+        odds = int(american_odds)
+        if odds > 0:
+            return 1 + odds / 100
+        else:
+            return 1 + 100 / abs(odds)
+    
+    def _generate_reasoning(self, details: Dict, odds_analysis: Dict) -> str:
+        """Generate human-readable reasoning."""
+        parts = []
+        
+        # Model agreement
+        agreement = details['model_agreement'][0]
+        if agreement > 0.8:
+            parts.append(f"Strong model consensus ({agreement:.0%} agreement)")
+        elif agreement > 0.6:
+            parts.append(f"Moderate model consensus ({agreement:.0%} agreement)")
+        else:
+            parts.append(f"Models disagree ({agreement:.0%} agreement)")
+        
+        # Individual model views
+        for name, proba in details['individual_probabilities'].items():
+            if proba is not None:
+                winner = "home" if proba[0] > 0.5 else "away"
+                conf = max(proba[0], 1 - proba[0])
+                parts.append(f"{name}: {winner} ({conf:.1%})")
+        
+        # Odds edge
+        if odds_analysis:
+            edge = odds_analysis['edge']
+            if edge > 0.05:
+                parts.append(f"STRONG VALUE: {edge:.1%} edge vs market")
+            elif edge > 0.02:
+                parts.append(f"Value bet: {edge:.1%} edge vs market")
+            elif edge < -0.02:
+                parts.append(f"Market disagrees: {-edge:.1%} against model")
+        
+        return " | ".join(parts)
+    
+    def place_prediction(self, analysis: Dict, stake: float = 100) -> Dict:
+        """Record a prediction (simulates placing a bet)."""
+        bet = {
+            'timestamp': datetime.now().isoformat(),
+            'game_id': analysis['game_id'],
+            'home_team': analysis['home_team'],
+            'away_team': analysis['away_team'],
+            'predicted_winner': analysis['predicted_winner'],
+            'confidence': analysis['confidence'],
+            'stake': stake,
+            'odds_analysis': analysis.get('odds_analysis'),
+            'reasoning': analysis['reasoning']
+        }
+        
+        self.bet_history.append(bet)
+        return bet
+    
+    def resolve_prediction(self, game_id: str, actual_winner: str):
+        """Resolve a prediction and update balance."""
+        for bet in self.bet_history:
+            if bet['game_id'] == game_id and 'result' not in bet:
+                won = bet['predicted_winner'] == actual_winner
+                bet['result'] = 'win' if won else 'loss'
+                bet['actual_winner'] = actual_winner
+                
+                if won and bet['odds_analysis']:
+                    # Calculate payout
+                    home_odds = bet['odds_analysis'].get('home_odds')
+                    away_odds = bet['odds_analysis'].get('away_odds')
+                    if home_odds and away_odds:
+                        if actual_winner == bet['home_team']:
+                            decimal_odds = self._american_to_decimal(home_odds)
+                        else:
+                            decimal_odds = self._american_to_decimal(away_odds)
+                        payout = bet['stake'] * decimal_odds
+                        profit = payout - bet['stake']
+                    else:
+                        profit = bet['stake']  # Even money fallback
+                else:
+                    profit = -bet['stake']
+                
+                bet['profit'] = profit
+                self.balance += profit
+                return bet
+        
+        return None
+    
+    def get_performance(self) -> Dict:
+        """Get agent performance summary."""
+        resolved = [b for b in self.bet_history if 'result' in b]
+        if not resolved:
+            return {'total_bets': 0, 'balance': self.balance}
+        
+        wins = [b for b in resolved if b['result'] == 'win']
+        total_profit = sum(b['profit'] for b in resolved)
+        total_staked = sum(b['stake'] for b in resolved)
+        
+        return {
+            'total_bets': len(resolved),
+            'wins': len(wins),
+            'losses': len(resolved) - len(wins),
+            'win_rate': len(wins) / len(resolved),
+            'total_staked': total_staked,
+            'total_profit': total_profit,
+            'roi': total_profit / total_staked if total_staked > 0 else 0,
+            'current_balance': self.balance,
+            'avg_confidence': np.mean([b['confidence'] for b in resolved])
+        }
+
+
+# ============================================================
+# MAIN INTEGRATION CLASS
+# ============================================================
+
+class AdvancedMLPipeline:
+    """
+    Main pipeline integrating all three packages:
+    1. Feature engineering from MLB-Game-Winner-Predictor
+    2. Ensemble ML models (Gradient Boosting, XGBoost, MLP, SVC, NearestCentroid)
+    3. Sports-betting backtesting with ClassifierBettor
+    4. DojoZero-style agent for live predictions
+    """
+    
+    def __init__(self):
+        self.ensemble = MLBEnsemblePredictor()
+        self.backtester = None
+        self.agent = None
+        self.is_trained = False
+    
+    def train(self, X: np.ndarray, y: np.ndarray, 
+              odds: Optional[np.ndarray] = None,
+              optimize_xgb: bool = False) -> Dict:
+        """
+        Train the full pipeline.
+        """
+        print("=" * 60)
+        print("TRAINING ADVANCED ML PIPELINE")
+        print("=" * 60)
+        
+        # Train ensemble
+        print("\n1. Training ensemble models...")
+        results = self.ensemble.train(X, y, optimize_xgb=optimize_xgb)
+        
+        # Setup backtester
+        print("\n2. Setting up betting backtester...")
+        self.backtester = BettingBacktester(self.ensemble)
+        if odds is not None:
+            self.backtester.prepare_bettor(X, y)
+        
+        # Setup agent
+        print("\n3. Initializing DojoZero-style agent...")
+        self.agent = DojoZeroStyleAgent(self.ensemble)
+        
+        self.is_trained = True
+        
+        print("\n[OK] Training complete!")
+        return {
+            'ensemble_results': results,
+            'backtester_ready': self.backtester is not None,
+            'agent_ready': self.agent is not None
+        }
+    
+    def predict_game(self, game_data: Dict) -> Dict:
+        """Predict a single game using the full pipeline."""
+        if not self.is_trained:
+            raise ValueError("Pipeline not trained")
+        
+        return self.agent.analyze_game(game_data)
+    
+    def predict_games(self, games: List[Dict]) -> List[Dict]:
+        """Predict multiple games."""
+        return [self.predict_game(game) for game in games]
+    
+    def backtest(self, X: np.ndarray, y: np.ndarray, odds: np.ndarray) -> Dict:
+        """Run backtest on historical data."""
+        if not self.backtester:
+            self.backtester = BettingBacktester(self.ensemble)
+        
+        return self.backtester.backtest(X, y, odds)
+    
+    def save(self, path: str):
+        """Save entire pipeline."""
+        os.makedirs(path, exist_ok=True)
+        self.ensemble.save(os.path.join(path, 'ensemble.joblib'))
+        with open(os.path.join(path, 'pipeline_config.json'), 'w') as f:
+            json.dump({
+                'is_trained': self.is_trained,
+                'model_weights': self.ensemble.model_weights,
+                'feature_names': self.ensemble.feature_engineer.feature_names
+            }, f, indent=2)
+        print(f"Pipeline saved to {path}")
+    
+    @classmethod
+    def load(cls, path: str):
+        """Load pipeline."""
+        pipeline = cls()
+        pipeline.ensemble = MLBEnsemblePredictor.load(
+            os.path.join(path, 'ensemble.joblib')
+        )
+        pipeline.backtester = BettingBacktester(pipeline.ensemble)
+        pipeline.agent = DojoZeroStyleAgent(pipeline.ensemble)
+        pipeline.is_trained = True
+        print(f"Pipeline loaded from {path}")
+        return pipeline
+
+
+# ============================================================
+# DATA LOADING HELPERS
+# ============================================================
+
+def load_mlb_game_winner_data(data_dir: str = "tmp/MLB-Game-Winner-Predictor-main") -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Load training data from MLB-Game-Winner-Predictor cleaned files.
+    """
+    train_path = os.path.join(data_dir, "Train_Test", "MLB2024_cleaned.csv")
+    if not os.path.exists(train_path):
+        raise FileNotFoundError(f"Training data not found at {train_path}")
+    
+    df = pd.read_csv(train_path)
+    print(f"Loaded {len(df)} training samples")
+    print(f"Features: {df.shape[1] - 1}")
+    print(f"Home win rate: {df['h_team_wins'].mean():.3f}")
+    
+    X = df.drop(columns=['h_team_wins']).values
+    y = df['h_team_wins'].values
+    
+    return X, y
+
+
+def create_sample_game_data(home_team: str, away_team: str, 
+                           home_stats: Dict = None, away_stats: Dict = None,
+                           odds: Dict = None) -> Dict:
+    """Create sample game data for prediction."""
+    return {
+        'game_id': f"{away_team}@{home_team}_{datetime.now().strftime('%Y%m%d')}",
+        'home_team': home_team,
+        'away_team': away_team,
+        'home_stats': home_stats or {},
+        'away_stats': away_stats or {},
+        'odds': odds,
+        'is_day_game': False
+    }
+
+
+# ============================================================
+# DEMO / TEST
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("ADVANCED ML INTEGRATION - DEMO")
+    print("=" * 60)
+    
+    # Check data availability
+    data_dir = "C:/Users/Hugo.DESKTOP-QQG83V5/tmp/MLB-Game-Winner-Predictor-main"
+    train_path = os.path.join(data_dir, "Train_Test", "MLB2024_cleaned.csv")
+    
+    if os.path.exists(train_path):
+        print(f"\n[DATA] Loading training data from {train_path}...")
+        X, y = load_mlb_game_winner_data(data_dir)
+        
+        # Create pipeline
+        pipeline = AdvancedMLPipeline()
+        
+        # Train (quick demo - no XGB optimization)
+        print("\n[START] Starting training...")
+        results = pipeline.train(X, y, optimize_xgb=False)
+        
+        print("\n[RESULTS] Training Results:")
+        for model, metrics in results['ensemble_results'].items():
+            if 'accuracy' in metrics:
+                print(f"  {model}: accuracy={metrics['accuracy']:.4f}")
+        
+        # Save pipeline
+        save_path = "C:/Users/Hugo.DESKTOP-QQG83V5/Downloads/plydb-fun-baseball-analyst-main/mlb_analyst/models/advanced_ml_pipeline"
+        pipeline.save(save_path)
+        
+        # Demo prediction
+        print("\n[PRED] Demo Prediction:")
+        sample_game = create_sample_game_data(
+            home_team="LAD",
+            away_team="NYY",
+            home_stats={'xwoba': 0.340, 'k_pct': 0.22, 'bb_pct': 0.09},
+            away_stats={'xwoba': 0.325, 'k_pct': 0.24, 'bb_pct': 0.08},
+            odds={'moneyline': {'home': '-150', 'away': '+130'}}
+        )
+        
+        prediction = pipeline.predict_game(sample_game)
+        print(json.dumps(prediction, indent=2, default=str))
+        
+        # Demo backtest
+        print("\n[DATA] Demo Backtest:")
+        # Generate sample odds (decimal)
+        sample_odds = np.random.uniform(1.5, 3.0, len(y))
+        backtest_results = pipeline.backtest(X[:100], y[:100], sample_odds[:100])
+        print(json.dumps(backtest_results, indent=2, default=str))
+        
+        # Demo agent performance
+        print("\n[AGENT] Agent Performance:")
+        perf = pipeline.agent.get_performance()
+        print(json.dumps(perf, indent=2, default=str))
+        
+    else:
+        print(f"❌ Training data not found at {train_path}")
+        print("Available data files:")
+        for root, dirs, files in os.walk(data_dir):
+            for f in files:
+                if f.endswith('.csv'):
+                    print(f"  {os.path.join(root, f)}")

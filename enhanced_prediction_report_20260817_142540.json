@@ -1,0 +1,481 @@
+{
+  "metadata": {
+    "generated_at": "2026-08-17T14:25:40.477223",
+    "data_sources": [
+      "sports-skills",
+      "pybaseball",
+      "local_legacy"
+    ],
+    "freshness_assessment": {
+      "overall_score": 0.6366666666666667,
+      "individual_scores": {
+        "sports_skills": 0.9,
+        "pybaseball": 0.0,
+        "local_data": 0.9333333333333333
+      },
+      "recommendation": "Good - Use with moderate confidence"
+    },
+    "prediction_count": 11
+  },
+  "predictions": [
+    {
+      "prediction": 0.5,
+      "confidence": 0.3,
+      "data_sources": [
+        "legacy",
+        "live",
+        "odds"
+      ],
+      "model_prediction": 0.5,
+      "model_confidence": 0.3,
+      "model_type": "unknown",
+      "live_enhancement": {
+        "season_context": {
+          "current_date": "2026-08-17",
+          "standings_available": true,
+          "live_data_freshness": {
+            "overall_score": 0.6366666666666667,
+            "individual_scores": {
+              "sports_skills": 0.9,
+              "pybaseball": 0.0,
+              "local_data": 0.9333333333333333
+            },
+            "recommendation": "Good - Use with moderate confidence"
+          }
+        },
+        "injuries": {},
+        "recent_trends": {
+          "status": "insufficient_data"
+        }
+      },
+      "odds_analysis": null,
+      "edge_vs_market": null,
+      "timestamp": "2026-08-17T14:25:40.244230"
+    },
+    {
+      "prediction": 0.494,
+      "confidence": 0.7,
+      "data_sources": [
+        "legacy",
+        "live",
+        "odds"
+      ],
+      "model_prediction": 0.49398663975287677,
+      "model_confidence": 0.7,
+      "model_type": "local_report",
+      "live_enhancement": {
+        "season_context": {
+          "current_date": "2026-08-17",
+          "standings_available": true,
+          "live_data_freshness": {
+            "overall_score": 0.6366666666666667,
+            "individual_scores": {
+              "sports_skills": 0.9,
+              "pybaseball": 0.0,
+              "local_data": 0.9333333333333333
+            },
+            "recommendation": "Good - Use with moderate confidence"
+          }
+        },
+        "injuries": {},
+        "recent_trends": {
+          "status": "insufficient_data"
+        }
+      },
+      "odds_analysis": {
+        "home_odds": "-163",
+        "away_odds": "+135",
+        "home_implied_prob": 0.6197718631178707,
+        "away_implied_prob": 0.425531914893617,
+        "home_fair_prob": 0.592910765420633,
+        "away_fair_prob": 0.4070892345793669,
+        "vig": 0.04530377801148777
+      },
+      "edge_vs_market": -0.0989,
+      "timestamp": "2026-08-17T14:25:40.264714"
+    },
+    {
+      "prediction": 0.4818,
+      "confidence": 0.4,
+      "data_sources": [
+        "legacy",
+        "live",
+        "odds"
+      ],
+      "model_prediction": 0.48177088548826114,
+      "model_confidence": 0.4,
+      "model_type": "unknown",
+      "live_enhancement": {
+        "season_context": {
+          "current_date": "2026-08-17",
+          "standings_available": true,
+          "live_data_freshness": {
+            "overall_score": 0.6366666666666667,
+            "individual_scores": {
+              "sports_skills": 0.9,
+              "pybaseball": 0.0,
+              "local_data": 0.9333333333333333
+            },
+            "recommendation": "Good - Use with moderate confidence"
+          }
+        },
+        "injuries": {},
+        "recent_trends": {
+          "status": "insufficient_data"
+        }
+      },
+      "odds_analysis": {
+        "home_odds": "-249",
+        "away_odds": "+201",
+        "home_implied_prob": 0.7134670487106017,
+        "away_implied_prob": 0.33222591362126247,
+        "home_fair_prob": 0.6822911451173884,
+        "away_fair_prob": 0.3177088548826116,
+        "vig": 0.04569296233186426
+      },
+      "edge_vs_market": -0.2005,
+      "timestamp": "2026-08-17T14:25:40.287865"
+    },
+    {
+      "prediction": 0.5,
+      "confidence": 0.3,
+      "data_sources": [
+        "legacy",
+        "live",
+        "odds"
+      ],
+      "model_prediction": 0.5,
+      "model_confidence": 0.3,
+      "model_type": "unknown",
+      "live_enhancement": {
+        "season_context": {
+          "current_date": "2026-08-17",
+          "standings_available": true,
+          "live_data_freshness": {
+            "overall_score": 0.6366666666666667,
+            "individual_scores": {
+              "sports_skills": 0.9,
+              "pybaseball": 0.0,
+              "local_data": 0.9333333333333333
+            },
+            "recommendation": "Good - Use with moderate confidence"
+          }
+        },
+        "injuries": {},
+        "recent_trends": {
+          "status": "insufficient_data"
+        }
+      },
+      "odds_analysis": null,
+      "edge_vs_market": null,
+      "timestamp": "2026-08-17T14:25:40.317852"
+    },
+    {
+      "prediction": 0.5,
+      "confidence": 0.4,
+      "data_sources": [
+        "legacy",
+        "live",
+        "odds"
+      ],
+      "model_prediction": 0.5,
+      "model_confidence": 0.4,
+      "model_type": "unknown",
+      "live_enhancement": {
+        "season_context": {
+          "current_date": "2026-08-17",
+          "standings_available": true,
+          "live_data_freshness": {
+            "overall_score": 0.6366666666666667,
+            "individual_scores": {
+              "sports_skills": 0.9,
+              "pybaseball": 0.0,
+              "local_data": 0.9333333333333333
+            },
+            "recommendation": "Good - Use with moderate confidence"
+          }
+        },
+        "injuries": {},
+        "recent_trends": {
+          "status": "insufficient_data"
+        }
+      },
+      "odds_analysis": {
+        "home_odds": "+102",
+        "away_odds": "-123",
+        "home_implied_prob": 0.49504950495049505,
+        "away_implied_prob": 0.5515695067264574,
+        "home_fair_prob": 0.4729987697789844,
+        "away_fair_prob": 0.5270012302210156,
+        "vig": 0.04661901167695248
+      },
+      "edge_vs_market": 0.027,
+      "timestamp": "2026-08-17T14:25:40.341872"
+    },
+    {
+      "prediction": 0.4916,
+      "confidence": 0.4,
+      "data_sources": [
+        "legacy",
+        "live",
+        "odds"
+      ],
+      "model_prediction": 0.49157903251900986,
+      "model_confidence": 0.4,
+      "model_type": "unknown",
+      "live_enhancement": {
+        "season_context": {
+          "current_date": "2026-08-17",
+          "standings_available": true,
+          "live_data_freshness": {
+            "overall_score": 0.6366666666666667,
+            "individual_scores": {
+              "sports_skills": 0.9,
+              "pybaseball": 0.0,
+              "local_data": 0.9333333333333333
+            },
+            "recommendation": "Good - Use with moderate confidence"
+          }
+        },
+        "injuries": {},
+        "recent_trends": {
+          "status": "insufficient_data"
+        }
+      },
+      "odds_analysis": {
+        "home_odds": "-157",
+        "away_odds": "+130",
+        "home_implied_prob": 0.6108949416342413,
+        "away_implied_prob": 0.43478260869565216,
+        "home_fair_prob": 0.5842096748099014,
+        "away_fair_prob": 0.4157903251900987,
+        "vig": 0.0456775503298934
+      },
+      "edge_vs_market": -0.0926,
+      "timestamp": "2026-08-17T14:25:40.364240"
+    },
+    {
+      "prediction": 0.5,
+      "confidence": 0.4,
+      "data_sources": [
+        "legacy",
+        "live",
+        "odds"
+      ],
+      "model_prediction": 0.5,
+      "model_confidence": 0.4,
+      "model_type": "unknown",
+      "live_enhancement": {
+        "season_context": {
+          "current_date": "2026-08-17",
+          "standings_available": true,
+          "live_data_freshness": {
+            "overall_score": 0.6366666666666667,
+            "individual_scores": {
+              "sports_skills": 0.9,
+              "pybaseball": 0.0,
+              "local_data": 0.9333333333333333
+            },
+            "recommendation": "Good - Use with moderate confidence"
+          }
+        },
+        "injuries": {},
+        "recent_trends": {
+          "status": "insufficient_data"
+        }
+      },
+      "odds_analysis": {
+        "home_odds": "-120",
+        "away_odds": "+100",
+        "home_implied_prob": 0.5454545454545454,
+        "away_implied_prob": 0.5,
+        "home_fair_prob": 0.5217391304347826,
+        "away_fair_prob": 0.4782608695652174,
+        "vig": 0.045454545454545414
+      },
+      "edge_vs_market": -0.0217,
+      "timestamp": "2026-08-17T14:25:40.388008"
+    },
+    {
+      "prediction": 0.4864,
+      "confidence": 0.4,
+      "data_sources": [
+        "legacy",
+        "live",
+        "odds"
+      ],
+      "model_prediction": 0.48639739111317387,
+      "model_confidence": 0.4,
+      "model_type": "unknown",
+      "live_enhancement": {
+        "season_context": {
+          "current_date": "2026-08-17",
+          "standings_available": true,
+          "live_data_freshness": {
+            "overall_score": 0.6366666666666667,
+            "individual_scores": {
+              "sports_skills": 0.9,
+              "pybaseball": 0.0,
+              "local_data": 0.9333333333333333
+            },
+            "recommendation": "Good - Use with moderate confidence"
+          }
+        },
+        "injuries": {},
+        "recent_trends": {
+          "status": "insufficient_data"
+        }
+      },
+      "odds_analysis": {
+        "home_odds": "-198",
+        "away_odds": "+163",
+        "home_implied_prob": 0.6644295302013423,
+        "away_implied_prob": 0.38022813688212925,
+        "home_fair_prob": 0.6360260888682611,
+        "away_fair_prob": 0.363973911131739,
+        "vig": 0.04465766708347152
+      },
+      "edge_vs_market": -0.1496,
+      "timestamp": "2026-08-17T14:25:40.410890"
+    },
+    {
+      "prediction": 0.5,
+      "confidence": 0.4,
+      "data_sources": [
+        "legacy",
+        "live",
+        "odds"
+      ],
+      "model_prediction": 0.5,
+      "model_confidence": 0.4,
+      "model_type": "unknown",
+      "live_enhancement": {
+        "season_context": {
+          "current_date": "2026-08-17",
+          "standings_available": true,
+          "live_data_freshness": {
+            "overall_score": 0.6366666666666667,
+            "individual_scores": {
+              "sports_skills": 0.9,
+              "pybaseball": 0.0,
+              "local_data": 0.9333333333333333
+            },
+            "recommendation": "Good - Use with moderate confidence"
+          }
+        },
+        "injuries": {},
+        "recent_trends": {
+          "status": "insufficient_data"
+        }
+      },
+      "odds_analysis": {
+        "home_odds": "+109",
+        "away_odds": "-132",
+        "home_implied_prob": 0.4784688995215311,
+        "away_implied_prob": 0.5689655172413793,
+        "home_fair_prob": 0.4568008190911239,
+        "away_fair_prob": 0.5431991809088762,
+        "vig": 0.04743441676291038
+      },
+      "edge_vs_market": 0.0432,
+      "timestamp": "2026-08-17T14:25:40.428335"
+    },
+    {
+      "prediction": 0.4895,
+      "confidence": 0.4,
+      "data_sources": [
+        "legacy",
+        "live",
+        "odds"
+      ],
+      "model_prediction": 0.48952109729164245,
+      "model_confidence": 0.4,
+      "model_type": "unknown",
+      "live_enhancement": {
+        "season_context": {
+          "current_date": "2026-08-17",
+          "standings_available": true,
+          "live_data_freshness": {
+            "overall_score": 0.6366666666666667,
+            "individual_scores": {
+              "sports_skills": 0.9,
+              "pybaseball": 0.0,
+              "local_data": 0.9333333333333333
+            },
+            "recommendation": "Good - Use with moderate confidence"
+          }
+        },
+        "injuries": {},
+        "recent_trends": {
+          "status": "insufficient_data"
+        }
+      },
+      "odds_analysis": {
+        "home_odds": "-172",
+        "away_odds": "+142",
+        "home_implied_prob": 0.6323529411764706,
+        "away_implied_prob": 0.4132231404958678,
+        "home_fair_prob": 0.6047890270835755,
+        "away_fair_prob": 0.39521097291642454,
+        "vig": 0.04557608167233829
+      },
+      "edge_vs_market": -0.1153,
+      "timestamp": "2026-08-17T14:25:40.452513"
+    },
+    {
+      "prediction": 0.5182,
+      "confidence": 0.4,
+      "data_sources": [
+        "legacy",
+        "live",
+        "odds"
+      ],
+      "model_prediction": 0.5182291145117388,
+      "model_confidence": 0.4,
+      "model_type": "unknown",
+      "live_enhancement": {
+        "season_context": {
+          "current_date": "2026-08-17",
+          "standings_available": true,
+          "live_data_freshness": {
+            "overall_score": 0.6366666666666667,
+            "individual_scores": {
+              "sports_skills": 0.9,
+              "pybaseball": 0.0,
+              "local_data": 0.9333333333333333
+            },
+            "recommendation": "Good - Use with moderate confidence"
+          }
+        },
+        "injuries": {},
+        "recent_trends": {
+          "status": "insufficient_data"
+        }
+      },
+      "odds_analysis": {
+        "home_odds": "+201",
+        "away_odds": "-249",
+        "home_implied_prob": 0.33222591362126247,
+        "away_implied_prob": 0.7134670487106017,
+        "home_fair_prob": 0.3177088548826116,
+        "away_fair_prob": 0.6822911451173884,
+        "vig": 0.04569296233186426
+      },
+      "edge_vs_market": 0.2005,
+      "timestamp": "2026-08-17T14:25:40.477147"
+    }
+  ],
+  "accuracy_analysis": {
+    "total_predictions": 11,
+    "avg_confidence": 0.4090909090909091,
+    "edge_analyses": [],
+    "model_weaknesses": [],
+    "recommendations": []
+  },
+  "enhanced_features": {
+    "live_injury_data": true,
+    "pybaseball_integration": true,
+    "multi_source_fusion": true,
+    "data_freshness_tracking": true
+  }
+}

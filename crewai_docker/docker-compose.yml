@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  crewai-mlb:
+    build: .
+    container_name: crewai-mlb-analyzer
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./analysis_result.json:/app/analysis_result.json
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Optional: Mount local data for team stats
+    # - ../data:/app/data:ro
+    # Optional: OpenAI API key for langchain-openai
+    # - OPENAI_API_KEY=${OPENAI_API_KEY}
+
+  # Development service with live reload
+  crewai-dev:
+    build: .
+    container_name: crewai-mlb-dev
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/app
+      - ../data:/app/data:ro
+    command: bash
+    environment:
+      - PYTHONUNBUFFERED=1
